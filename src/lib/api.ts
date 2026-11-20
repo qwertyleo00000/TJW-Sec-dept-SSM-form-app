@@ -11,7 +11,10 @@ const TOKEN_STORAGE_KEY = 'cosec_vault_auth_token';
 
 function getStoredToken(): string | null {
   try {
-    return window.sessionStorage.getItem(TOKEN_STORAGE_KEY);
+    return (
+      window.sessionStorage.getItem(TOKEN_STORAGE_KEY) ||
+      window.localStorage.getItem(TOKEN_STORAGE_KEY)
+    );
   } catch {
     return null;
   }
@@ -21,8 +24,10 @@ export function setStoredToken(token: string | null): void {
   try {
     if (token) {
       window.sessionStorage.setItem(TOKEN_STORAGE_KEY, token);
+      window.localStorage.setItem(TOKEN_STORAGE_KEY, token);
     } else {
       window.sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+      window.localStorage.removeItem(TOKEN_STORAGE_KEY);
     }
   } catch {
     // Ignore storage restriction errors in sandboxed iframes
@@ -41,11 +46,18 @@ function buildAuthHeaders(extra?: Record<string, string>): HeadersInit {
 }
 
 async function parseJsonResponse<T>(res: Response): Promise<T> {
-  const data = (await res.json().catch(() => ({}))) as { error?: string } & T;
-  if (!res.ok) {
-    throw new Error(data.error || `Request failed (${res.status})`);
+  const text = await res.text();
+  let data: any = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { error: text || `Request failed with status ${res.status}` };
   }
-  return data;
+
+  if (!res.ok) {
+    throw new Error(data.error || data.message || `Request failed (${res.status})`);
+  }
+  return data as T;
 }
 
 export async function loginWithPassword(

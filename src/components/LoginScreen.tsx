@@ -1,13 +1,11 @@
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import {
-  ArrowRight,
   Building2,
   Check,
   CheckCircle2,
   Eye,
   EyeOff,
-  KeyRound,
   Loader2,
   Lock,
   Mail,
@@ -73,7 +71,6 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
     }
   }, []);
 
-  // Password strength validation helper
   const hasMinLength = regPassword.length >= 12;
   const hasUpper = /[A-Z]/.test(regPassword);
   const hasLower = /[a-z]/.test(regPassword);
@@ -91,8 +88,12 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
     setError(null);
     setLoading(true);
     try {
-      const session = await loginWithPassword(signInEmail, signInPassword);
-      onAuthenticated(session);
+      const session = await loginWithPassword(signInEmail.trim(), signInPassword);
+      if (session && session.user) {
+        onAuthenticated(session);
+      } else {
+        throw new Error('Invalid authentication response from server.');
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Sign in failed.');
     } finally {
@@ -273,7 +274,7 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
                         autoComplete="email"
                         value={signInEmail}
                         onChange={(e) => setSignInEmail(e.target.value)}
-                        placeholder="director@company.com.my"
+                        placeholder="qwertyleo00000@gmail.com"
                         className="w-full pl-10 pr-4 py-2.5 text-sm text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900"
                       />
                     </div>
@@ -299,7 +300,6 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
                       </button>
                     </div>
                     <div className="relative">
-                      <KeyRound className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                       <input
                         id="signin-password"
                         type={showSignInPassword ? 'text' : 'password'}
@@ -308,7 +308,7 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
                         value={signInPassword}
                         onChange={(e) => setSignInPassword(e.target.value)}
                         placeholder="••••••••••••"
-                        className="w-full pl-10 pr-10 py-2.5 text-sm text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900"
+                        className="w-full pl-3.5 pr-10 py-2.5 text-sm text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900"
                       />
                       <button
                         type="button"
@@ -327,19 +327,16 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
 
                   <button
                     type="submit"
-                    disabled={loading || !signInEmail || !signInPassword}
+                    disabled={loading}
                     className="w-full mt-2 flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg bg-[#0F172A] text-white text-sm font-semibold hover:bg-slate-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 disabled:opacity-60 transition-colors cursor-pointer"
                   >
                     {loading ? (
                       <>
                         <Loader2 className="w-4 h-4 animate-spin" />
-                        <span>Signing In...</span>
+                        <span>Signing in...</span>
                       </>
                     ) : (
-                      <>
-                        <span>Sign In to Vault</span>
-                        <ArrowRight className="w-4 h-4" />
-                      </>
+                      <span>Sign In to Vault</span>
                     )}
                   </button>
                 </form>
