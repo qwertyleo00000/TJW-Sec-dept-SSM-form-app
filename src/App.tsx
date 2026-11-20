@@ -72,9 +72,16 @@ export default function App() {
     fetchCurrentSession()
       .then((existing) => {
         if (cancelled) return;
-        if (existing && existing.authorizedCompanies.length > 0) {
+        if (existing && existing.user) {
           setSession(existing);
-          setActiveMyCoId(existing.authorizedCompanies[0].myCoId);
+          setActiveMyCoId(existing.authorizedCompanies[0]?.myCoId ?? '');
+          if (
+            (existing.user.role === 'administrator' ||
+              existing.user.role === 'manager') &&
+            existing.authorizedCompanies.length === 0
+          ) {
+            setCurrentTab('users');
+          }
         }
       })
       .catch(() => {
@@ -124,7 +131,15 @@ export default function App() {
   function handleAuthenticated(newSession: AuthSessionResponse) {
     setSession(newSession);
     setActiveMyCoId(newSession.authorizedCompanies[0]?.myCoId ?? '');
-    setCurrentTab('vault');
+    if (
+      newSession.authorizedCompanies.length === 0 &&
+      (newSession.user.role === 'administrator' ||
+        newSession.user.role === 'manager')
+    ) {
+      setCurrentTab('users');
+    } else {
+      setCurrentTab('vault');
+    }
     setAiQuery('');
     setAiResult(null);
     setAiError(null);
@@ -245,7 +260,7 @@ export default function App() {
     );
   }
 
-  if (!session || !activeCompany) {
+  if (!session) {
     return (
       <>
         <LoginScreen onAuthenticated={handleAuthenticated} />
@@ -261,7 +276,11 @@ export default function App() {
 
   const footerWhatsappUrl = buildMissingFormWhatsappUrl({
     whatsappNumber,
-    company: activeCompany,
+    company: activeCompany ?? {
+      myCoId: '000000-X',
+      companyName: 'Unassigned Company',
+      driveFolderId: '',
+    },
     missingForms: ['General Statutory Form Inquiry'],
     user: session.user,
   });
@@ -281,6 +300,51 @@ export default function App() {
       <main className="flex-1 max-w-[1240px] w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
         {currentTab === 'users' && isAdminOrManager ? (
           <UserManagementPanel currentUser={session.user} />
+        ) : !activeCompany ? (
+          <div className="bg-white rounded-xl border border-slate-200 p-8 sm:p-12 text-center max-w-xl mx-auto my-12 shadow-xs space-y-4">
+            <div className="w-14 h-14 bg-amber-50 text-amber-600 rounded-full flex items-center justify-center mx-auto">
+              <ShieldCheck className="w-7 h-7" />
+            </div>
+            <h2 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
+              No Company Assigned Yet
+            </h2>
+            <p className="text-sm text-slate-600 leading-relaxed">
+              {isAdminOrManager ? (
+                <>
+                  Your account does not currently have any companies linked or assigned. As an administrator or manager, you can switch to the Access Rights & Users panel to assign companies and manage user access.
+                </>
+              ) : (
+                <>
+                  Your account is active, but no company folder has been assigned to your profile yet. Please contact your Company Secretary team or system administrator to link your company vault.
+                </>
+              )}
+            </p>
+            {isAdminOrManager ? (
+              <div className="pt-3">
+                <button
+                  type="button"
+                  onClick={() => setCurrentTab('users')}
+                  className="px-5 py-2.5 rounded-lg bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800 transition-colors cursor-pointer shadow-sm"
+                >
+                  Manage Users & Assign Companies
+                </button>
+              </div>
+            ) : (
+              <div className="pt-3">
+                <a
+                  href={`https://wa.me/${whatsappNumber.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(
+                    `Hello CoSec Team, my account (${session.user.email}) is currently not assigned to any company vault. Please assist in linking my access.`
+                  )}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg border border-[#25D366]/60 bg-white text-sm font-semibold text-emerald-800 hover:bg-emerald-50 transition-colors shadow-xs"
+                >
+                  <WhatsAppIcon className="w-4 h-4 text-[#25D366]" />
+                  <span>Contact CoSec Support via WhatsApp</span>
+                </a>
+              </div>
+            )}
+          </div>
         ) : (
           <>
             {/* Active Company Summary Header */}
@@ -413,7 +477,7 @@ export default function App() {
 
       <MissingFormModal
         open={missingModalOpen}
-        company={activeCompany}
+        company={activeCompany ?? { myCoId: '000000-X', companyName: 'Unassigned Company', driveFolderId: '' }}
         user={session.user}
         whatsappNumber={whatsappNumber}
         onClose={() => setMissingModalOpen(false)}

@@ -18,7 +18,7 @@ import { VaultEmblem } from './BrandMark';
 interface TopNavProps {
   user: AuthenticatedUser;
   companies: CompanyAssignment[];
-  activeCompany: CompanyAssignment;
+  activeCompany: CompanyAssignment | null;
   onSelectCompany: (company: CompanyAssignment) => void;
   onLogout: () => void;
   currentTab: 'vault' | 'users';
