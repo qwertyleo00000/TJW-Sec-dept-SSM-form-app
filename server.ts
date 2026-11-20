@@ -87,6 +87,7 @@ async function startServer() {
       setSessionCookie(req, res, token);
 
       res.json({
+        ok: true,
         user: {
           email: user.email,
           fullName: user.fullName,
@@ -182,11 +183,11 @@ async function startServer() {
           fullName: user.fullName,
           role: user.role,
           status: user.status,
+          passwordHash: user.passwordHash,
           companies: user.companies,
           requestedCompany: user.requestedCompany,
         });
 
-        // Store token hash in user record
         const registry = await import('./server/registry.ts');
         const reg = registry.loadRegistry();
         const idx = reg.users.findIndex((u: { email: string }) => u.email.toLowerCase() === email);
@@ -258,6 +259,7 @@ async function startServer() {
         fullName: user.fullName,
         role: user.role,
         status: user.status,
+        passwordHash,
         companies: user.companies,
         requestedCompany: user.requestedCompany,
       });
@@ -757,7 +759,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`CoSec Vault Password Auth server running on http://0.0.0.0:${PORT}`);
+    console.log(`CoSec Vault Auth Token server running on http://0.0.0.0:${PORT}`);
   });
 }
 

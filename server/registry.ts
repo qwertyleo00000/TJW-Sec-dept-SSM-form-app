@@ -42,10 +42,11 @@ export function loadRegistry(): RegistryFile {
     if (!data || !Array.isArray(data.users)) {
       return { users: [] };
     }
+    const defaultPasswordHash = hashPassword('Mycorporate50');
     data.users = data.users.map((u) => ({
       ...u,
       status: u.status === 'pending' ? 'pending' : 'active',
-      passwordHash: u.passwordHash ?? hashPassword('Mycorporate50'),
+      passwordHash: u.passwordHash && u.passwordHash.includes(':') ? u.passwordHash : defaultPasswordHash,
       companies: Array.isArray(u.companies) ? u.companies : [],
     }));
     return data;
@@ -65,12 +66,11 @@ export function bootstrapAdmin(): void {
   const adminEmails = ['qwertyleo00000@gmail.com'];
   const envAdmin = process.env.ADMIN_EMAIL?.trim().toLowerCase();
   if (envAdmin && !adminEmails.includes(envAdmin)) {
-    adminEmails.includes(envAdmin) || adminEmails.push(envAdmin);
+    adminEmails.push(envAdmin);
   }
 
   const registry = loadRegistry();
   let modified = false;
-
   const defaultPasswordHash = hashPassword('Mycorporate50');
 
   for (const adminEmail of adminEmails) {
@@ -91,7 +91,7 @@ export function bootstrapAdmin(): void {
         updatedUser.status = 'active';
         needsUpdate = true;
       }
-      if (!existing.passwordHash) {
+      if (!existing.passwordHash || !existing.passwordHash.includes(':')) {
         updatedUser.passwordHash = defaultPasswordHash;
         needsUpdate = true;
       }
@@ -103,7 +103,7 @@ export function bootstrapAdmin(): void {
     } else {
       registry.users.push({
         email: adminEmail,
-        fullName: adminEmail === 'qwertyleo00000@gmail.com' ? 'Administrator' : 'System Administrator',
+        fullName: 'Administrator',
         role: 'administrator',
         status: 'active',
         passwordHash: defaultPasswordHash,
@@ -187,6 +187,7 @@ export function upsertUser(userData: {
   );
 
   const existing = existingIdx >= 0 ? registry.users[existingIdx] : null;
+  const defaultPasswordHash = hashPassword('Mycorporate50');
 
   const cleaned: RegistryUser = {
     email: normalizedEmail,
@@ -194,7 +195,7 @@ export function upsertUser(userData: {
     role: userData.role,
     status: userData.status ?? existing?.status ?? 'active',
     passwordHash:
-      userData.passwordHash ?? existing?.passwordHash ?? hashPassword('Mycorporate50'),
+      userData.passwordHash ?? existing?.passwordHash ?? defaultPasswordHash,
     companies: Array.isArray(userData.companies)
       ? userData.companies.map((c) => ({
           myCoId: c.myCoId.trim(),

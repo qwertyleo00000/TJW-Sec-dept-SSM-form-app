@@ -134,30 +134,21 @@ export function setSessionCookie(
   res: Response,
   token: string,
 ): void {
-  const isHttps =
-    req.secure ||
-    req.headers['x-forwarded-proto'] === 'https' ||
-    process.env.NODE_ENV === 'production';
-
+  // Always use sameSite: 'none' and secure: true for cross-origin HTTPS iframe in AI Studio
   res.cookie(SESSION_COOKIE_NAME, token, {
     httpOnly: true,
-    secure: isHttps,
-    sameSite: isHttps ? 'none' : 'lax',
+    secure: true,
+    sameSite: 'none',
     maxAge: SESSION_TTL_MS,
     path: '/',
   });
 }
 
 export function clearSessionCookie(req: Request, res: Response): void {
-  const isHttps =
-    req.secure ||
-    req.headers['x-forwarded-proto'] === 'https' ||
-    process.env.NODE_ENV === 'production';
-
   res.clearCookie(SESSION_COOKIE_NAME, {
     httpOnly: true,
-    secure: isHttps,
-    sameSite: isHttps ? 'none' : 'lax',
+    secure: true,
+    sameSite: 'none',
     path: '/',
   });
 }
