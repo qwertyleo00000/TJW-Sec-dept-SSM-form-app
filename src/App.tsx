@@ -3,15 +3,18 @@ import { FilePlus2, Loader2, ShieldCheck } from 'lucide-react';
 import type {
   AiSearchResponse,
   AuthSessionResponse,
-  PublicCompany,
+  CompanyAssignment,
   StatutoryDocument,
 } from './types';
 import {
   aiSearchCompanyDocuments,
+  deleteStatutoryFile,
   downloadCompanyPdf,
   fetchCompanyDocuments,
   fetchCurrentSession,
   logoutSession,
+  renameStatutoryFile,
+  uploadStatutoryPdf,
 } from './lib/api';
 import {
   DEFAULT_COSEC_WHATSAPP_NUMBER,
@@ -26,11 +29,13 @@ import { MissingFormModal } from './components/MissingFormModal';
 import { Toast } from './components/Toast';
 import type { ToastMessage } from './components/Toast';
 import { TopNav } from './components/TopNav';
+import { UserManagementPanel } from './components/UserManagementPanel';
 
 export default function App() {
   const [session, setSession] = useState<AuthSessionResponse | null>(null);
   const [initializing, setInitializing] = useState(true);
-  const [activeCompanyId, setActiveCompanyId] = useState<string>('');
+  const [activeMyCoId, setActiveMyCoId] = useState<string>('');
+  const [currentTab, setCurrentTab] = useState<'vault' | 'users'>('vault');
 
   const [documents, setDocuments] = useState<StatutoryDocument[]>([]);
   const [docsLoading, setDocsLoading] = useState(false);
@@ -62,7 +67,6 @@ export default function App() {
     [],
   );
 
-  // Restore existing authenticated session on boot
   useEffect(() => {
     let cancelled = false;
     fetchCurrentSession()
@@ -70,11 +74,11 @@ export default function App() {
         if (cancelled) return;
         if (existing && existing.authorizedCompanies.length > 0) {
           setSession(existing);
-          setActiveCompanyId(existing.authorizedCompanies[0].companyId);
+          setActiveMyCoId(existing.authorizedCompanies[0].myCoId);
         }
       })
       .catch(() => {
-        // Unauthenticated fallback to login screen
+        // Unauthenticated fallback
       })
       .finally(() => {
         if (!cancelled) setInitializing(false);
@@ -85,22 +89,20 @@ export default function App() {
     };
   }, []);
 
-  const activeCompany: PublicCompany | null = useMemo(() => {
+  const activeCompany: CompanyAssignment | null = useMemo(() => {
     if (!session) return null;
     return (
-      session.authorizedCompanies.find(
-        (c) => c.companyId === activeCompanyId,
-      ) ??
+      session.authorizedCompanies.find((c) => c.myCoId === activeMyCoId) ??
       session.authorizedCompanies[0] ??
       null
     );
-  }, [session, activeCompanyId]);
+  }, [session, activeMyCoId]);
 
-  const loadDocuments = useCallback(async (companyId: string) => {
+  const loadDocuments = useCallback(async (myCoId: string) => {
     setDocsLoading(true);
     setDocsError(null);
     try {
-      const data = await fetchCompanyDocuments(companyId);
+      const data = await fetchCompanyDocuments(myCoId);
       setDocuments(data.documents);
     } catch (err) {
       setDocuments([]);
@@ -116,20 +118,20 @@ export default function App() {
 
   useEffect(() => {
     if (!activeCompany) return;
-    loadDocuments(activeCompany.companyId);
+    loadDocuments(activeCompany.myCoId);
   }, [activeCompany, loadDocuments]);
 
   function handleAuthenticated(newSession: AuthSessionResponse) {
     setSession(newSession);
-    setActiveCompanyId(newSession.authorizedCompanies[0]?.companyId ?? '');
+    setActiveMyCoId(newSession.authorizedCompanies[0]?.myCoId ?? '');
+    setCurrentTab('vault');
     setAiQuery('');
     setAiResult(null);
     setAiError(null);
   }
 
-  function handleSelectCompany(company: PublicCompany) {
-    setActiveCompanyId(company.companyId);
-    // Reset AI search state immediately on company switch to preserve strict visual isolation
+  function handleSelectCompany(company: CompanyAssignment) {
+    setActiveMyCoId(company.myCoId);
     setAiQuery('');
     setAiResult(null);
     setAiError(null);
@@ -138,7 +140,7 @@ export default function App() {
   async function handleLogout() {
     await logoutSession();
     setSession(null);
-    setActiveCompanyId('');
+    setActiveMyCoId('');
     setDocuments([]);
     setAiQuery('');
     setAiResult(null);
@@ -152,7 +154,7 @@ export default function App() {
     setAiError(null);
     try {
       const result = await aiSearchCompanyDocuments(
-        activeCompany.companyId,
+        activeCompany.myCoId,
         queryText,
       );
       setAiResult(result);
@@ -173,7 +175,7 @@ export default function App() {
     setDownloadingFileId(doc.fileId);
     try {
       const downloadedName = await downloadCompanyPdf(
-        activeCompany.companyId,
+        activeCompany.myCoId,
         doc.fileId,
         doc.fileName,
       );
@@ -186,6 +188,27 @@ export default function App() {
     } finally {
       setDownloadingFileId(null);
     }
+  }
+
+  async function handleUploadFile(file: File) {
+    if (!activeCompany) return;
+    const newDoc = await uploadStatutoryPdf(activeCompany.myCoId, file);
+    setDocuments((prev) => [newDoc, ...prev]);
+    showToast(`Successfully uploaded ${newDoc.fileName}`, 'success');
+  }
+
+  async function handleRenameFile(fileId: string, newName: string) {
+    await renameStatutoryFile(fileId, newName);
+    if (activeCompany) {
+      await loadDocuments(activeCompany.myCoId);
+    }
+    showToast('Document renamed successfully', 'success');
+  }
+
+  async function handleDeleteFile(fileId: string) {
+    await deleteStatutoryFile(fileId);
+    setDocuments((prev) => prev.filter((d) => d.fileId !== fileId));
+    showToast('Document deleted successfully', 'success');
   }
 
   function handleCtcClick(_doc: StatutoryDocument) {
@@ -216,7 +239,7 @@ export default function App() {
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
         <div className="flex items-center gap-3 text-sm text-slate-600">
           <Loader2 className="w-5 h-5 animate-spin text-slate-900" />
-          <span>Verifying CoSec Vault session...</span>
+          <span>Verifying CoSec Vault RBAC session...</span>
         </div>
       </div>
     );
@@ -233,6 +256,8 @@ export default function App() {
 
   const whatsappNumber =
     session.cosecWhatsappNumber || DEFAULT_COSEC_WHATSAPP_NUMBER;
+  const isAdminOrManager =
+    session.user.role === 'administrator' || session.user.role === 'manager';
 
   const footerWhatsappUrl = buildMissingFormWhatsappUrl({
     whatsappNumber,
@@ -249,95 +274,106 @@ export default function App() {
         activeCompany={activeCompany}
         onSelectCompany={handleSelectCompany}
         onLogout={handleLogout}
+        currentTab={currentTab}
+        onTabChange={setCurrentTab}
       />
 
       <main className="flex-1 max-w-[1240px] w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
-        {/* Active Company Summary Header */}
-        <section className="flex flex-col lg:flex-row lg:items-end justify-between gap-4 pb-6 border-b border-slate-200">
-          <div className="min-w-0">
-            <h1 className="font-display text-2xl sm:text-[1.75rem] font-bold text-slate-900 tracking-tight leading-tight">
-              {activeCompany.companyName}
-            </h1>
-            <div className="mt-2 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs sm:text-sm text-slate-600">
-              <span className="font-mono tabular-nums font-medium text-slate-800">
-                SSM {activeCompany.registrationNo}
-              </span>
-              <span aria-hidden="true" className="text-slate-300">
-                ·
-              </span>
-              <span className="inline-flex items-center gap-1 text-emerald-700 font-medium">
-                <ShieldCheck className="w-4 h-4 shrink-0" />
-                <span>Authorized {session.user.role}</span>
-              </span>
-              <span aria-hidden="true" className="text-slate-300">
-                ·
-              </span>
-              <span className="font-mono tabular-nums">
-                {documents.length} statutory filing
-                {documents.length === 1 ? '' : 's'}
-              </span>
-              {latestUpdateDate && (
-                <>
+        {currentTab === 'users' && isAdminOrManager ? (
+          <UserManagementPanel currentUser={session.user} />
+        ) : (
+          <>
+            {/* Active Company Summary Header */}
+            <section className="flex flex-col lg:flex-row lg:items-end justify-between gap-4 pb-6 border-b border-slate-200">
+              <div className="min-w-0">
+                <h1 className="font-display text-2xl sm:text-[1.75rem] font-bold text-slate-900 tracking-tight leading-tight">
+                  {activeCompany.companyName}
+                </h1>
+                <div className="mt-2 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs sm:text-sm text-slate-600">
+                  <span className="font-mono tabular-nums font-medium text-slate-800">
+                    SSM {activeCompany.myCoId}
+                  </span>
+                  <span aria-hidden="true" className="text-slate-300">
+                    ·
+                  </span>
+                  <span className="inline-flex items-center gap-1 text-emerald-700 font-medium">
+                    <ShieldCheck className="w-4 h-4 shrink-0" />
+                    <span className="capitalize">{session.user.role}</span>
+                  </span>
                   <span aria-hidden="true" className="text-slate-300">
                     ·
                   </span>
                   <span className="font-mono tabular-nums">
-                    Latest update {latestUpdateDate}
+                    {documents.length} statutory filing
+                    {documents.length === 1 ? '' : 's'}
                   </span>
-                </>
-              )}
-            </div>
-          </div>
+                  {latestUpdateDate && (
+                    <>
+                      <span aria-hidden="true" className="text-slate-300">
+                        ·
+                      </span>
+                      <span className="font-mono tabular-nums">
+                        Latest update {latestUpdateDate}
+                      </span>
+                    </>
+                  )}
+                </div>
+              </div>
 
-          <div className="flex items-center gap-3 shrink-0">
-            <button
-              type="button"
-              onClick={() => setMissingModalOpen(true)}
-              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg border border-slate-300 bg-white text-xs sm:text-sm font-semibold text-slate-800 hover:bg-slate-50 hover:border-slate-400 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <FilePlus2 className="w-4 h-4 text-slate-500" />
-              <span>Request Missing Form</span>
-            </button>
-          </div>
-        </section>
+              <div className="flex items-center gap-3 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setMissingModalOpen(true)}
+                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg border border-slate-300 bg-white text-xs sm:text-sm font-semibold text-slate-800 hover:bg-slate-50 hover:border-slate-400 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <FilePlus2 className="w-4 h-4 text-slate-500" />
+                  <span>Request Missing Form</span>
+                </button>
+              </div>
+            </section>
 
-        {/* Gemini AI Smart Concierge */}
-        <AiConciergePanel
-          company={activeCompany}
-          user={session.user}
-          whatsappNumber={whatsappNumber}
-          documents={documents}
-          query={aiQuery}
-          onQueryChange={setAiQuery}
-          result={aiResult}
-          loading={aiLoading}
-          error={aiError}
-          downloadingFileId={downloadingFileId}
-          onSearch={handleAiSearch}
-          onReset={() => {
-            setAiQuery('');
-            setAiResult(null);
-            setAiError(null);
-          }}
-          onDownload={handleDownload}
-          onCtcClick={handleCtcClick}
-          onMissingWhatsappClick={() => handleMissingWhatsappClick()}
-        />
+            {/* Gemini AI Smart Concierge */}
+            <AiConciergePanel
+              company={activeCompany}
+              user={session.user}
+              whatsappNumber={whatsappNumber}
+              documents={documents}
+              query={aiQuery}
+              onQueryChange={setAiQuery}
+              result={aiResult}
+              loading={aiLoading}
+              error={aiError}
+              downloadingFileId={downloadingFileId}
+              onSearch={handleAiSearch}
+              onReset={() => {
+                setAiQuery('');
+                setAiResult(null);
+                setAiError(null);
+              }}
+              onDownload={handleDownload}
+              onCtcClick={handleCtcClick}
+              onMissingWhatsappClick={() => handleMissingWhatsappClick()}
+            />
 
-        {/* Categorized Statutory Document Table */}
-        <DocumentTable
-          company={activeCompany}
-          user={session.user}
-          whatsappNumber={whatsappNumber}
-          documents={documents}
-          loading={docsLoading}
-          error={docsError}
-          downloadingFileId={downloadingFileId}
-          onRetry={() => loadDocuments(activeCompany.companyId)}
-          onDownload={handleDownload}
-          onCtcClick={handleCtcClick}
-          onOpenMissingModal={() => setMissingModalOpen(true)}
-        />
+            {/* Categorized Statutory Document Table */}
+            <DocumentTable
+              company={activeCompany}
+              user={session.user}
+              whatsappNumber={whatsappNumber}
+              documents={documents}
+              loading={docsLoading}
+              error={docsError}
+              downloadingFileId={downloadingFileId}
+              onRetry={() => loadDocuments(activeCompany.myCoId)}
+              onDownload={handleDownload}
+              onCtcClick={handleCtcClick}
+              onOpenMissingModal={() => setMissingModalOpen(true)}
+              onUploadFile={handleUploadFile}
+              onRenameFile={handleRenameFile}
+              onDeleteFile={handleDeleteFile}
+            />
+          </>
+        )}
       </main>
 
       {/* Missing Document Request Footer */}

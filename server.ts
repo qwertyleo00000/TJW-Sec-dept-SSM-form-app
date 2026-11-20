@@ -2,6 +2,7 @@ import 'dotenv/config';
 import cookieParser from 'cookie-parser';
 import crypto from 'crypto';
 import express from 'express';
+import multer from 'multer';
 import path from 'path';
 import type { MissingFormSubmission } from './src/types.ts';
 import {
@@ -9,16 +10,26 @@ import {
   createSessionToken,
   issueOtpForEmail,
   requireAuth,
+  requireRole,
   setSessionCookie,
   verifyOtpForEmail,
 } from './server/auth.ts';
 import type { AuthenticatedRequest } from './server/auth.ts';
-import { getDownloadableFile, listDocumentsForFolder } from './server/drive.ts';
+import {
+  deleteFile,
+  getDownloadableFile,
+  listDocumentsForFolder,
+  renameFile,
+  uploadFileToFolder,
+} from './server/drive.ts';
 import { searchCompanyDocumentsWithGemini } from './server/gemini.ts';
 import {
+  deleteUser,
   findUserByEmail,
+  getAllAccessibleCompanies,
+  getAllUsers,
   getAuthorizedCompany,
-  toPublicCompanies,
+  upsertUser,
 } from './server/registry.ts';
 
 const PORT = Number(process.env.PORT ?? 3000);
@@ -27,14 +38,18 @@ const COSEC_WHATSAPP_NUMBER =
   '601136768398';
 
 const missingFormRequests: MissingFormSubmission[] = [];
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB max PDF
+});
 
 async function startServer() {
   const app = express();
   app.set('trust proxy', 1);
-  app.use(express.json({ limit: '1mb' }));
+  app.use(express.json({ limit: '2mb' }));
   app.use(cookieParser());
 
-  // 1. POST /api/auth/request-otp (Never returns OTP code in payload)
+  // 1. Auth APIs
   app.post('/api/auth/request-otp', (req, res) => {
     const email = typeof req.body?.email === 'string' ? req.body.email.trim() : '';
     if (!email) {
@@ -60,7 +75,6 @@ async function startServer() {
     });
   });
 
-  // 2. POST /api/auth/verify-otp
   app.post('/api/auth/verify-otp', (req, res) => {
     const email = typeof req.body?.email === 'string' ? req.body.email.trim() : '';
     const otp = typeof req.body?.otp === 'string' ? req.body.otp.trim() : '';
@@ -92,14 +106,14 @@ async function startServer() {
         email: user.email,
         fullName: user.fullName,
         role: user.role,
+        companies: user.companies,
       },
-      authorizedCompanies: toPublicCompanies(user.authorizedCompanies),
+      authorizedCompanies: getAllAccessibleCompanies(user),
       cosecWhatsappNumber: COSEC_WHATSAPP_NUMBER,
       token,
     });
   });
 
-  // Session inspection & logout
   app.get('/api/auth/me', requireAuth, (req: AuthenticatedRequest, res) => {
     const user = req.authUser!;
     res.json({
@@ -107,8 +121,9 @@ async function startServer() {
         email: user.email,
         fullName: user.fullName,
         role: user.role,
+        companies: user.companies,
       },
-      authorizedCompanies: toPublicCompanies(user.authorizedCompanies),
+      authorizedCompanies: getAllAccessibleCompanies(user),
       cosecWhatsappNumber: COSEC_WHATSAPP_NUMBER,
     });
   });
@@ -118,27 +133,28 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  // 3. GET /api/companies/:companyId/documents
+  // 2. Vault Document APIs
   app.get(
-    '/api/companies/:companyId/documents',
+    '/api/companies/:myCoId/documents',
     requireAuth,
     async (req: AuthenticatedRequest, res) => {
       try {
-        const companyId = String(req.params.companyId);
-        const access = getAuthorizedCompany(req.authUser!.email, companyId);
-        if (!access) {
+        const myCoId = String(req.params.myCoId);
+        const user = req.authUser!;
+        const company = getAuthorizedCompany(user, myCoId);
+        if (!company) {
           res.status(403).json({
             error: 'Access denied. You are not authorized to access documents for this company.',
           });
           return;
         }
 
-        const documents = await listDocumentsForFolder(access.company.driveFolderId);
+        const documents = await listDocumentsForFolder(company.driveFolderId);
         res.json({
           company: {
-            companyId: access.company.companyId,
-            companyName: access.company.companyName,
-            registrationNo: access.company.registrationNo,
+            myCoId: company.myCoId,
+            companyName: company.companyName,
+            registrationNo: company.myCoId,
           },
           documents,
         });
@@ -150,13 +166,12 @@ async function startServer() {
     },
   );
 
-  // 4. POST /api/companies/:companyId/ai-search
   app.post(
-    '/api/companies/:companyId/ai-search',
+    '/api/companies/:myCoId/ai-search',
     requireAuth,
     async (req: AuthenticatedRequest, res) => {
       try {
-        const companyId = String(req.params.companyId);
+        const myCoId = String(req.params.myCoId);
         const query = typeof req.body?.query === 'string' ? req.body.query.trim() : '';
 
         if (!query) {
@@ -164,17 +179,18 @@ async function startServer() {
           return;
         }
 
-        const access = getAuthorizedCompany(req.authUser!.email, companyId);
-        if (!access) {
+        const user = req.authUser!;
+        const company = getAuthorizedCompany(user, myCoId);
+        if (!company) {
           res.status(403).json({
             error: 'Access denied. You are not authorized to query this company vault.',
           });
           return;
         }
 
-        const documents = await listDocumentsForFolder(access.company.driveFolderId);
+        const documents = await listDocumentsForFolder(company.driveFolderId);
         const aiResult = await searchCompanyDocumentsWithGemini(
-          access.company.companyName,
+          company.companyName,
           documents,
           query,
         );
@@ -191,24 +207,24 @@ async function startServer() {
     },
   );
 
-  // 5. GET /api/companies/:companyId/download/:fileId
   app.get(
-    '/api/companies/:companyId/download/:fileId',
+    '/api/companies/:myCoId/download/:fileId',
     requireAuth,
     async (req: AuthenticatedRequest, res) => {
       try {
-        const companyId = String(req.params.companyId);
+        const myCoId = String(req.params.myCoId);
         const fileId = String(req.params.fileId);
 
-        const access = getAuthorizedCompany(req.authUser!.email, companyId);
-        if (!access) {
+        const user = req.authUser!;
+        const company = getAuthorizedCompany(user, myCoId);
+        if (!company) {
           res.status(403).json({
             error: 'Access denied. You are not authorized to download files for this company.',
           });
           return;
         }
 
-        const file = await getDownloadableFile(access.company, fileId);
+        const file = await getDownloadableFile(company, fileId);
         if (!file) {
           res.status(404).json({
             error: 'Document not found within your authorized company vault.',
@@ -241,14 +257,216 @@ async function startServer() {
     },
   );
 
-  // 6. POST /api/companies/:companyId/missing-request
+  // 3. Admin & Manager File Management Routes
   app.post(
-    '/api/companies/:companyId/missing-request',
+    '/api/admin/files/upload',
+    requireAuth,
+    requireRole('administrator', 'manager'),
+    upload.single('file'),
+    async (req: AuthenticatedRequest, res) => {
+      try {
+        const myCoId = typeof req.body?.myCoId === 'string' ? req.body.myCoId.trim() : '';
+        const file = req.file;
+
+        if (!myCoId || !file) {
+          res.status(400).json({ error: 'Company ID and PDF file are required for upload.' });
+          return;
+        }
+
+        const user = req.authUser!;
+        const company = getAuthorizedCompany(user, myCoId);
+        if (!company) {
+          res.status(403).json({ error: 'Access denied to target company folder.' });
+          return;
+        }
+
+        const newDoc = await uploadFileToFolder(
+          company.driveFolderId,
+          file.buffer,
+          file.originalname || 'Statutory_Filing.pdf',
+          file.mimetype || 'application/pdf',
+        );
+
+        res.status(201).json({ document: newDoc });
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : 'Failed to upload statutory document.';
+        res.status(500).json({ error: message });
+      }
+    },
+  );
+
+  app.patch(
+    '/api/admin/files/:fileId',
+    requireAuth,
+    requireRole('administrator', 'manager'),
+    async (req: AuthenticatedRequest, res) => {
+      try {
+        const fileId = String(req.params.fileId);
+        const newFileName =
+          typeof req.body?.newFileName === 'string'
+            ? req.body.newFileName.trim()
+            : '';
+
+        if (!newFileName) {
+          res.status(400).json({ error: 'New file name is required.' });
+          return;
+        }
+
+        await renameFile(fileId, newFileName);
+        res.json({ success: true });
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : 'Failed to rename statutory document.';
+        res.status(500).json({ error: message });
+      }
+    },
+  );
+
+  app.delete(
+    '/api/admin/files/:fileId',
+    requireAuth,
+    requireRole('administrator', 'manager'),
+    async (req: AuthenticatedRequest, res) => {
+      try {
+        const fileId = String(req.params.fileId);
+        await deleteFile(fileId);
+        res.json({ success: true });
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : 'Failed to delete statutory document.';
+        res.status(500).json({ error: message });
+      }
+    },
+  );
+
+  // 4. User & Access Rights Management APIs
+  app.get(
+    '/api/admin/users',
+    requireAuth,
+    requireRole('administrator', 'manager'),
+    (req: AuthenticatedRequest, res) => {
+      const users = getAllUsers();
+      res.json({ users });
+    },
+  );
+
+  app.post(
+    '/api/admin/users',
+    requireAuth,
+    requireRole('administrator', 'manager'),
+    (req: AuthenticatedRequest, res) => {
+      const caller = req.authUser!;
+      const email = typeof req.body?.email === 'string' ? req.body.email.trim() : '';
+      const fullName =
+        typeof req.body?.fullName === 'string' ? req.body.fullName.trim() : '';
+      const role = typeof req.body?.role === 'string' ? req.body.role.trim() : 'user';
+      const companies = Array.isArray(req.body?.companies) ? req.body.companies : [];
+
+      if (!email || !fullName) {
+        res.status(400).json({ error: 'Email and full name are required.' });
+        return;
+      }
+
+      if (role !== 'user' && role !== 'manager' && role !== 'administrator') {
+        res.status(400).json({ error: 'Invalid role specified.' });
+        return;
+      }
+
+      // If caller is manager, they can only create/manage 'user' accounts
+      if (caller.role === 'manager' && role !== 'user') {
+        res.status(403).json({ error: 'Managers can only create or manage standard user accounts.' });
+        return;
+      }
+
+      const updated = upsertUser({ email, fullName, role, companies });
+      res.status(201).json({ user: updated });
+    },
+  );
+
+  app.patch(
+    '/api/admin/users/:email',
+    requireAuth,
+    requireRole('administrator', 'manager'),
+    (req: AuthenticatedRequest, res) => {
+      const caller = req.authUser!;
+      const targetEmail = decodeURIComponent(req.params.email).trim().toLowerCase();
+      const existing = findUserByEmail(targetEmail);
+
+      if (!existing) {
+        res.status(404).json({ error: 'User not found in registry.' });
+        return;
+      }
+
+      // If caller is manager, they cannot modify managers or administrators
+      if (caller.role === 'manager' && existing.role !== 'user') {
+        res.status(403).json({ error: 'Managers cannot modify administrator or manager accounts.' });
+        return;
+      }
+
+      const fullName =
+        typeof req.body?.fullName === 'string'
+          ? req.body.fullName.trim()
+          : existing.fullName;
+      const role =
+        typeof req.body?.role === 'string' ? req.body.role.trim() : existing.role;
+      const companies = Array.isArray(req.body?.companies)
+        ? req.body.companies
+        : existing.companies;
+
+      if (caller.role === 'manager' && role !== 'user') {
+        res.status(403).json({ error: 'Managers cannot assign manager or administrator roles.' });
+        return;
+      }
+
+      const updated = upsertUser({ email: targetEmail, fullName, role, companies });
+      res.json({ user: updated });
+    },
+  );
+
+  app.delete(
+    '/api/admin/users/:email',
+    requireAuth,
+    requireRole('administrator', 'manager'),
+    (req: AuthenticatedRequest, res) => {
+      const caller = req.authUser!;
+      const targetEmail = decodeURIComponent(req.params.email).trim().toLowerCase();
+      const existing = findUserByEmail(targetEmail);
+
+      if (!existing) {
+        res.status(404).json({ error: 'User not found.' });
+        return;
+      }
+
+      if (caller.role === 'manager' && existing.role !== 'user') {
+        res.status(403).json({ error: 'Managers can only delete standard user accounts.' });
+        return;
+      }
+
+      if (caller.email.toLowerCase() === targetEmail) {
+        res.status(400).json({ error: 'You cannot delete your own account.' });
+        return;
+      }
+
+      const success = deleteUser(targetEmail);
+      if (!success) {
+        res.status(404).json({ error: 'User could not be deleted.' });
+        return;
+      }
+
+      res.json({ success: true });
+    },
+  );
+
+  // Missing Form Request
+  app.post(
+    '/api/companies/:myCoId/missing-request',
     requireAuth,
     (req: AuthenticatedRequest, res) => {
-      const companyId = String(req.params.companyId);
-      const access = getAuthorizedCompany(req.authUser!.email, companyId);
-      if (!access) {
+      const myCoId = String(req.params.myCoId);
+      const user = req.authUser!;
+      const company = getAuthorizedCompany(user, myCoId);
+      if (!company) {
         res.status(403).json({ error: 'Access denied for this company.' });
         return;
       }
@@ -265,8 +483,8 @@ async function startServer() {
 
       const submission: MissingFormSubmission = {
         id: `REQ-${crypto.randomBytes(3).toString('hex').toUpperCase()}`,
-        companyId: access.company.companyId,
-        companyName: access.company.companyName,
+        companyId: company.myCoId,
+        companyName: company.companyName,
         formName,
         notes,
         submittedAt: new Date().toISOString(),
@@ -293,7 +511,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`CoSec Vault server running on http://0.0.0.0:${PORT}`);
+    console.log(`CoSec Vault RBAC server running on http://0.0.0.0:${PORT}`);
   });
 }
 

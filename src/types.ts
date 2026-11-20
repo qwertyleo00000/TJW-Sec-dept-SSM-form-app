@@ -15,21 +15,28 @@ export interface StatutoryDocument {
   fileSizeKB: number;
 }
 
-export interface PublicCompany {
-  companyId: string;
+export interface CompanyAssignment {
+  myCoId: string;
   companyName: string;
-  registrationNo: string;
+  driveFolderId: string;
+  registrationNo?: string;
+  companyId?: string;
 }
+
+export type PublicCompany = CompanyAssignment;
+
+export type UserRole = 'administrator' | 'manager' | 'user';
 
 export interface AuthenticatedUser {
   email: string;
   fullName: string;
-  role: string;
+  role: UserRole;
+  companies: CompanyAssignment[];
 }
 
 export interface AuthSessionResponse {
   user: AuthenticatedUser;
-  authorizedCompanies: PublicCompany[];
+  authorizedCompanies: CompanyAssignment[];
   cosecWhatsappNumber: string;
   token?: string;
 }

@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import type { NextFunction, Request, Response } from 'express';
+import type { UserRole } from '../src/types.ts';
 import { findUserByEmail } from './registry.ts';
 import type { RegistryUser } from './registry.ts';
 
@@ -9,7 +10,6 @@ const SESSION_TTL_MS = 1000 * 60 * 60 * 12; // 12 hours
 const OTP_TTL_MS = 1000 * 60 * 10; // 10 minutes
 const MAX_OTP_ATTEMPTS = 5;
 
-// Enforce robust 32+ character SESSION_SECRET
 const rawSecret = process.env.SESSION_SECRET?.trim();
 const SESSION_SECRET =
   rawSecret && rawSecret.length >= 32
@@ -205,4 +205,20 @@ export function requireAuth(
 
   req.authUser = user;
   next();
+}
+
+export function requireRole(...allowedRoles: UserRole[]) {
+  return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    if (!req.authUser) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    if (!allowedRoles.includes(req.authUser.role)) {
+      res.status(403).json({
+        error: `Access denied. Requires one of roles: ${allowedRoles.join(', ')}.`,
+      });
+      return;
+    }
+    next();
+  };
 }

@@ -46,6 +46,9 @@ export function MissingFormModal({
 
   if (!open) return null;
 
+  const regNo = company.registrationNo || company.myCoId;
+  const companyKey = company.myCoId || company.registrationNo || '';
+
   const whatsappUrl = buildMissingFormWhatsappUrl({
     whatsappNumber,
     company,
@@ -61,7 +64,7 @@ export function MissingFormModal({
     setSubmitting(true);
     try {
       const submission = await submitMissingFormRequest(
-        company.companyId,
+        companyKey,
         formName.trim(),
         notes.trim(),
       );
@@ -101,9 +104,7 @@ export function MissingFormModal({
             </h3>
             <p className="mt-1 text-xs text-slate-500">
               {company.companyName} ·{' '}
-              <span className="font-mono tabular-nums">
-                {company.registrationNo}
-              </span>
+              <span className="font-mono tabular-nums">{regNo}</span>
             </p>
           </div>
           <button

@@ -1,7 +1,7 @@
 import { google } from 'googleapis';
-import type { Readable } from 'stream';
+import { Readable } from 'stream';
 import type { DocumentCategory, StatutoryDocument } from '../src/types.ts';
-import type { RegistryCompany } from './registry.ts';
+import type { CompanyAssignment } from '../src/types.ts';
 
 export function classifyStatutoryFile(fileName: string): {
   statutorySection: string;
@@ -52,7 +52,7 @@ function getDriveClient() {
   const auth = new google.auth.JWT({
     email,
     key: privateKey,
-    scopes: ['https://www.googleapis.com/auth/drive.readonly'],
+    scopes: ['https://www.googleapis.com/auth/drive'],
   });
 
   return google.drive({ version: 'v3', auth });
@@ -99,14 +99,10 @@ export async function listDocumentsForFolder(
 }
 
 export async function getDownloadableFile(
-  company: RegistryCompany,
+  company: CompanyAssignment,
   fileId: string,
-): Promise<
-  | { kind: 'stream'; fileName: string; stream: Readable }
-  | null
-> {
+): Promise<{ kind: 'stream'; fileName: string; stream: Readable } | null> {
   const drive = getDriveClient();
-  // Strict IDOR check: verify file metadata and confirm it lives inside company.driveFolderId
   const meta = await drive.files.get({
     fileId,
     fields: 'id, name, mimeType, parents, trashed',
@@ -133,4 +129,67 @@ export async function getDownloadableFile(
     fileName: file.name ?? `${fileId}.pdf`,
     stream: mediaRes.data as Readable,
   };
+}
+
+export async function uploadFileToFolder(
+  driveFolderId: string,
+  fileBuffer: Buffer,
+  fileName: string,
+  mimeType = 'application/pdf',
+): Promise<StatutoryDocument> {
+  const drive = getDriveClient();
+  const stream = new Readable();
+  stream.push(fileBuffer);
+  stream.push(null);
+
+  const response = await drive.files.create({
+    requestBody: {
+      name: fileName,
+      parents: [driveFolderId],
+    },
+    media: {
+      mimeType,
+      body: stream,
+    },
+    fields: 'id, name, modifiedTime, size',
+    supportsAllDrives: true,
+  });
+
+  const file = response.data;
+  const { statutorySection, category } = classifyStatutoryFile(file.name ?? fileName);
+  const sizeBytes = file.size ? Number(file.size) : fileBuffer.length;
+
+  return {
+    fileId: file.id ?? `file-${Date.now()}`,
+    fileName: file.name ?? fileName,
+    statutorySection,
+    category,
+    lastUpdated: file.modifiedTime ?? new Date().toISOString(),
+    fileSizeKB: Math.max(1, Math.round(sizeBytes / 1024)),
+  };
+}
+
+export async function renameFile(
+  fileId: string,
+  newFileName: string,
+): Promise<void> {
+  const drive = getDriveClient();
+  await drive.files.update({
+    fileId,
+    requestBody: {
+      name: newFileName,
+    },
+    supportsAllDrives: true,
+  });
+}
+
+export async function deleteFile(fileId: string): Promise<void> {
+  const drive = getDriveClient();
+  await drive.files.update({
+    fileId,
+    requestBody: {
+      trashed: true,
+    },
+    supportsAllDrives: true,
+  });
 }

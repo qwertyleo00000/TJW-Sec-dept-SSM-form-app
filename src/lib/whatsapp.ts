@@ -12,10 +12,12 @@ export function buildCtcWhatsappUrl(params: {
     (params.whatsappNumber ?? DEFAULT_COSEC_WHATSAPP_NUMBER).replace(/\D/g, '') ||
     DEFAULT_COSEC_WHATSAPP_NUMBER;
 
+  const regNo = params.company.registrationNo || params.company.myCoId;
+
   const message = `Hello CoSec Team, I would like to request a Certified True Copy (CTC) signed by the Company Secretary for the following document:
 
 *Company Name:* ${params.company.companyName}
-*SSM Reg No:* ${params.company.registrationNo}
+*SSM Reg No:* ${regNo}
 *Document:* ${params.document.fileName} (${params.document.statutorySection})
 *Requested By:* ${params.user.fullName} (${params.user.email})
 
@@ -35,6 +37,8 @@ export function buildMissingFormWhatsappUrl(params: {
     (params.whatsappNumber ?? DEFAULT_COSEC_WHATSAPP_NUMBER).replace(/\D/g, '') ||
     DEFAULT_COSEC_WHATSAPP_NUMBER;
 
+  const regNo = params.company.registrationNo || params.company.myCoId;
+
   const formsText =
     params.missingForms.length > 0
       ? params.missingForms.join(', ')
@@ -47,7 +51,7 @@ export function buildMissingFormWhatsappUrl(params: {
   const message = `Hello CoSec Team, I would like to request the following statutory form(s) that are not currently available in our CoSec Vault:
 
 *Company Name:* ${params.company.companyName}
-*SSM Reg No:* ${params.company.registrationNo}
+*SSM Reg No:* ${regNo}
 *Requested Form(s):* ${formsText}${notesBlock}
 *Requested By:* ${params.user.fullName} (${params.user.email})
 

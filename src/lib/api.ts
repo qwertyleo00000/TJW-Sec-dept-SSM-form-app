@@ -1,9 +1,10 @@
 import type {
   AiSearchResponse,
   AuthSessionResponse,
+  CompanyAssignment,
   MissingFormSubmission,
-  PublicCompany,
   StatutoryDocument,
+  UserRole,
 } from '../types';
 
 const TOKEN_STORAGE_KEY = 'cosec_vault_auth_token';
@@ -52,7 +53,6 @@ export async function requestOtp(email: string): Promise<{
   email: string;
   fullName: string;
   expiresInSeconds: number;
-  demoOtp?: string;
 }> {
   const res = await fetch('/api/auth/request-otp', {
     method: 'POST',
@@ -105,12 +105,12 @@ export async function logoutSession(): Promise<void> {
   }
 }
 
-export async function fetchCompanyDocuments(companyId: string): Promise<{
-  company: PublicCompany;
+export async function fetchCompanyDocuments(myCoId: string): Promise<{
+  company: CompanyAssignment;
   documents: StatutoryDocument[];
 }> {
   const res = await fetch(
-    `/api/companies/${encodeURIComponent(companyId)}/documents`,
+    `/api/companies/${encodeURIComponent(myCoId)}/documents`,
     {
       method: 'GET',
       headers: buildAuthHeaders(),
@@ -121,11 +121,11 @@ export async function fetchCompanyDocuments(companyId: string): Promise<{
 }
 
 export async function aiSearchCompanyDocuments(
-  companyId: string,
+  myCoId: string,
   query: string,
 ): Promise<AiSearchResponse> {
   const res = await fetch(
-    `/api/companies/${encodeURIComponent(companyId)}/ai-search`,
+    `/api/companies/${encodeURIComponent(myCoId)}/ai-search`,
     {
       method: 'POST',
       headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
@@ -137,12 +137,12 @@ export async function aiSearchCompanyDocuments(
 }
 
 export async function downloadCompanyPdf(
-  companyId: string,
+  myCoId: string,
   fileId: string,
   fallbackFileName: string,
 ): Promise<string> {
   const res = await fetch(
-    `/api/companies/${encodeURIComponent(companyId)}/download/${encodeURIComponent(fileId)}`,
+    `/api/companies/${encodeURIComponent(myCoId)}/download/${encodeURIComponent(fileId)}`,
     {
       method: 'GET',
       headers: buildAuthHeaders(),
@@ -172,13 +172,116 @@ export async function downloadCompanyPdf(
   return fileName;
 }
 
+export async function uploadStatutoryPdf(
+  myCoId: string,
+  file: File,
+): Promise<StatutoryDocument> {
+  const formData = new FormData();
+  formData.append('myCoId', myCoId);
+  formData.append('file', file);
+
+  const res = await fetch('/api/admin/files/upload', {
+    method: 'POST',
+    headers: buildAuthHeaders(),
+    credentials: 'include',
+    body: formData,
+  });
+  const data = await parseJsonResponse<{ document: StatutoryDocument }>(res);
+  return data.document;
+}
+
+export async function renameStatutoryFile(
+  fileId: string,
+  newFileName: string,
+): Promise<void> {
+  const res = await fetch(
+    `/api/admin/files/${encodeURIComponent(fileId)}`,
+    {
+      method: 'PATCH',
+      headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
+      credentials: 'include',
+      body: JSON.stringify({ newFileName }),
+    },
+  );
+  await parseJsonResponse(res);
+}
+
+export async function deleteStatutoryFile(fileId: string): Promise<void> {
+  const res = await fetch(
+    `/api/admin/files/${encodeURIComponent(fileId)}`,
+    {
+      method: 'DELETE',
+      headers: buildAuthHeaders(),
+      credentials: 'include',
+    },
+  );
+  await parseJsonResponse(res);
+}
+
+export async function fetchAdminUsers(): Promise<
+  Array<{
+    email: string;
+    fullName: string;
+    role: UserRole;
+    companies: CompanyAssignment[];
+  }>
+> {
+  const res = await fetch('/api/admin/users', {
+    method: 'GET',
+    headers: buildAuthHeaders(),
+    credentials: 'include',
+  });
+  const data = await parseJsonResponse<{
+    users: Array<{
+      email: string;
+      fullName: string;
+      role: UserRole;
+      companies: CompanyAssignment[];
+    }>;
+  }>(res);
+  return data.users;
+}
+
+export async function saveAdminUser(userData: {
+  email: string;
+  fullName: string;
+  role: UserRole;
+  companies: CompanyAssignment[];
+  isEdit?: boolean;
+}): Promise<void> {
+  const endpoint = userData.isEdit
+    ? `/api/admin/users/${encodeURIComponent(userData.email)}`
+    : '/api/admin/users';
+  const method = userData.isEdit ? 'PATCH' : 'POST';
+
+  const res = await fetch(endpoint, {
+    method,
+    headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
+    credentials: 'include',
+    body: JSON.stringify(userData),
+  });
+  await parseJsonResponse(res);
+}
+
+export async function deleteAdminUser(email: string): Promise<void> {
+  const res = await fetch(
+    `/api/admin/users/${encodeURIComponent(email)}`,
+    {
+      method: 'DELETE',
+      headers: buildAuthHeaders(),
+      credentials: 'include',
+    },
+  );
+  await parseJsonResponse(res);
+}
+
 export async function submitMissingFormRequest(
-  companyId: string,
+  myCoId: string,
   formName: string,
   notes: string,
 ): Promise<MissingFormSubmission> {
   const res = await fetch(
-    `/api/companies/${encodeURIComponent(companyId)}/missing-request`,
+    `/api/companies/${encodeURIComponent(myCoId)}/missing-request`,
     {
       method: 'POST',
       headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
