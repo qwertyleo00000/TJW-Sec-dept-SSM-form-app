@@ -4,48 +4,49 @@ import { findUserByEmail } from './registry.ts';
 import type { RegistryUser } from './registry.ts';
 
 export const SESSION_COOKIE_NAME = 'cosec_vault_session';
-export const DEMO_EMAIL = 'director@alphatrading.com.my';
-export const DEMO_OTP = '123456';
 
 const SESSION_TTL_MS = 1000 * 60 * 60 * 12; // 12 hours
 const OTP_TTL_MS = 1000 * 60 * 10; // 10 minutes
+const MAX_OTP_ATTEMPTS = 5;
 
+// Enforce robust 32+ character SESSION_SECRET
+const rawSecret = process.env.SESSION_SECRET?.trim();
 const SESSION_SECRET =
-  process.env.SESSION_SECRET && process.env.SESSION_SECRET.length >= 16
-    ? process.env.SESSION_SECRET
-    : crypto.randomBytes(32).toString('hex');
+  rawSecret && rawSecret.length >= 32
+    ? rawSecret
+    : (() => {
+        const generated = crypto.randomBytes(32).toString('hex');
+        console.warn(
+          '[CoSec Vault Security] SESSION_SECRET not provided or under 32 characters in environment. Generated secure ephemeral secret.',
+        );
+        return generated;
+      })();
 
-interface PendingOtp {
+interface OtpRecord {
   code: string;
   expiresAt: number;
+  attempts: number;
 }
 
-const pendingOtps = new Map<string, PendingOtp>();
+const pendingOtps = new Map<string, OtpRecord>();
 
 export interface AuthenticatedRequest extends Request {
   authUser?: RegistryUser;
 }
 
 export function issueOtpForEmail(email: string): {
-  code: string;
-  isDemo: boolean;
   expiresInSeconds: number;
 } {
   const normalized = email.trim().toLowerCase();
-  const isDemo =
-    normalized === DEMO_EMAIL || process.env.USE_MOCK_DRIVE !== 'false';
-  const code = isDemo
-    ? DEMO_OTP
-    : String(crypto.randomInt(100000, 999999));
+  const code = String(crypto.randomInt(100000, 1000000));
 
   pendingOtps.set(normalized, {
     code,
     expiresAt: Date.now() + OTP_TTL_MS,
+    attempts: 0,
   });
 
   return {
-    code,
-    isDemo,
     expiresInSeconds: Math.floor(OTP_TTL_MS / 1000),
   };
 }
@@ -54,19 +55,16 @@ export function verifyOtpForEmail(email: string, submittedOtp: string): boolean 
   const normalized = email.trim().toLowerCase();
   const trimmedOtp = submittedOtp.trim();
 
-  // Always allow the documented demo OTP for the demo user in mock/preview mode
-  if (
-    normalized === DEMO_EMAIL &&
-    trimmedOtp === DEMO_OTP &&
-    process.env.USE_MOCK_DRIVE !== 'false'
-  ) {
-    pendingOtps.delete(normalized);
-    return true;
-  }
-
   const record = pendingOtps.get(normalized);
   if (!record) return false;
+
   if (Date.now() > record.expiresAt) {
+    pendingOtps.delete(normalized);
+    return false;
+  }
+
+  record.attempts += 1;
+  if (record.attempts > MAX_OTP_ATTEMPTS) {
     pendingOtps.delete(normalized);
     return false;
   }
@@ -132,7 +130,11 @@ export function verifySessionToken(token: string): SessionPayload | null {
   }
 }
 
-export function setSessionCookie(req: Request, res: Response, token: string): void {
+export function setSessionCookie(
+  req: Request,
+  res: Response,
+  token: string,
+): void {
   const isHttps =
     req.secure ||
     req.headers['x-forwarded-proto'] === 'https' ||
@@ -187,13 +189,17 @@ export function requireAuth(
 
   const payload = verifySessionToken(token);
   if (!payload) {
-    res.status(401).json({ error: 'Session expired or invalid. Please sign in again.' });
+    res
+      .status(401)
+      .json({ error: 'Session expired or invalid. Please sign in again.' });
     return;
   }
 
   const user = findUserByEmail(payload.email);
   if (!user) {
-    res.status(403).json({ error: 'Account is no longer active in the Client Access Registry.' });
+    res
+      .status(403)
+      .json({ error: 'Account is no longer active in the Client Access Registry.' });
     return;
   }
 

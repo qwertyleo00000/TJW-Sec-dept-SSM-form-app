@@ -17,17 +17,12 @@ interface LoginScreenProps {
   onAuthenticated: (session: AuthSessionResponse) => void;
 }
 
-const DEMO_EMAIL = 'director@alphatrading.com.my';
-const DEMO_OTP = '123456';
-
 export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
   const [step, setStep] = useState<'email' | 'otp'>('email');
-  const [email, setEmail] = useState(DEMO_EMAIL);
+  const [email, setEmail] = useState('');
   const [otp, setOtp] = useState('');
-  const [demoOtpBanner, setDemoOtpBanner] = useState<string | null>(null);
   const [recipientName, setRecipientName] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [demoLoading, setDemoLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function handleRequestOtp(e: FormEvent) {
@@ -37,10 +32,6 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
     try {
       const result = await requestOtp(email);
       setRecipientName(result.fullName);
-      setDemoOtpBanner(result.demoOtp ?? null);
-      if (result.demoOtp) {
-        setOtp(result.demoOtp);
-      }
       setStep('otp');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to send OTP.');
@@ -57,23 +48,11 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
       const session = await verifyOtp(email, otp);
       onAuthenticated(session);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Invalid verification code.');
+      setError(
+        err instanceof Error ? err.message : 'Invalid verification code.',
+      );
     } finally {
       setLoading(false);
-    }
-  }
-
-  async function handleInstantDemoLogin() {
-    setError(null);
-    setDemoLoading(true);
-    try {
-      await requestOtp(DEMO_EMAIL);
-      const session = await verifyOtp(DEMO_EMAIL, DEMO_OTP);
-      onAuthenticated(session);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Demo sign-in failed.');
-    } finally {
-      setDemoLoading(false);
     }
   }
 
@@ -158,7 +137,7 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
               <p className="mt-2 text-sm text-slate-600 leading-relaxed">
                 {step === 'email'
                   ? 'Enter your registered corporate email address to receive a 6-digit One-Time Passcode (OTP).'
-                  : `We sent a 6-digit verification code for ${recipientName ?? email}.`}
+                  : `We sent a 6-digit verification code to ${recipientName ?? email}.`}
               </p>
             </div>
 
@@ -197,13 +176,13 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
 
                 <button
                   type="submit"
-                  disabled={loading || demoLoading}
+                  disabled={loading || !email.trim()}
                   className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg bg-[#0F172A] text-white text-sm font-semibold hover:bg-slate-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 disabled:opacity-60 transition-colors cursor-pointer"
                 >
                   {loading ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      <span>Verifying Email...</span>
+                      <span>Sending OTP...</span>
                     </>
                   ) : (
                     <>
@@ -215,15 +194,6 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
               </form>
             ) : (
               <form onSubmit={handleVerifyOtp} className="mt-7 space-y-5">
-                {demoOtpBanner && (
-                  <div className="rounded-lg border border-emerald-200 bg-emerald-50/70 px-4 py-3 text-sm text-emerald-900 flex items-center justify-between gap-3">
-                    <span>Demo verification code ready</span>
-                    <span className="font-mono font-semibold tabular-nums tracking-widest text-emerald-800">
-                      {demoOtpBanner}
-                    </span>
-                  </div>
-                )}
-
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
                     <label
@@ -255,7 +225,9 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
                       required
                       autoFocus
                       value={otp}
-                      onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                      onChange={(e) =>
+                        setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))
+                      }
                       placeholder="123456"
                       className="w-full pl-10 pr-4 py-2.5 text-base font-mono tabular-nums tracking-[0.25em] text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-slate-900 transition-colors"
                     />
@@ -281,32 +253,6 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
                 </button>
               </form>
             )}
-
-            {/* Prototype / Demo Preview Quick Access */}
-            <div className="mt-8 pt-6 border-t border-slate-200">
-              <div className="flex items-center justify-between text-xs text-slate-500 mb-3">
-                <span className="font-medium text-slate-700">Preview Demo Access</span>
-                <span className="font-mono tabular-nums">Demo Code: {DEMO_OTP}</span>
-              </div>
-              <p className="text-xs text-slate-500 leading-relaxed mb-4">
-                Sign in immediately as <span className="font-medium text-slate-700">Tan Sri Ahmad Razak</span> (<span className="font-mono">{DEMO_EMAIL}</span>) with access to 2 Malaysian Sdn. Bhd. entities.
-              </p>
-              <button
-                type="button"
-                onClick={handleInstantDemoLogin}
-                disabled={loading || demoLoading}
-                className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg border border-slate-300 bg-slate-50 text-slate-900 text-sm font-medium hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 disabled:opacity-60 transition-colors cursor-pointer"
-              >
-                {demoLoading ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Signing in to Demo Vault...</span>
-                  </>
-                ) : (
-                  <span>Quick Demo Sign-In (Tan Sri Ahmad Razak)</span>
-                )}
-              </button>
-            </div>
           </div>
 
           <p className="mt-6 text-center text-xs text-slate-500">

@@ -34,7 +34,7 @@ async function startServer() {
   app.use(express.json({ limit: '1mb' }));
   app.use(cookieParser());
 
-  // 1. POST /api/auth/request-otp
+  // 1. POST /api/auth/request-otp (Never returns OTP code in payload)
   app.post('/api/auth/request-otp', (req, res) => {
     const email = typeof req.body?.email === 'string' ? req.body.email.trim() : '';
     if (!email) {
@@ -57,7 +57,6 @@ async function startServer() {
       email: user.email,
       fullName: user.fullName,
       expiresInSeconds: issued.expiresInSeconds,
-      ...(issued.isDemo ? { demoOtp: issued.code } : {}),
     });
   });
 
@@ -173,7 +172,6 @@ async function startServer() {
           return;
         }
 
-        // Strict tenant isolation: load ONLY this company's verified document metadata
         const documents = await listDocumentsForFolder(access.company.driveFolderId);
         const aiResult = await searchCompanyDocumentsWithGemini(
           access.company.companyName,
@@ -226,12 +224,6 @@ async function startServer() {
         );
         res.setHeader('Cache-Control', 'private, no-store');
 
-        if (file.kind === 'buffer') {
-          res.setHeader('Content-Length', String(file.buffer.length));
-          res.send(file.buffer);
-          return;
-        }
-
         file.stream.on('error', (streamErr) => {
           console.error('PDF stream error:', streamErr);
           if (!res.headersSent) {
@@ -249,7 +241,7 @@ async function startServer() {
     },
   );
 
-  // 6. POST /api/companies/:companyId/missing-request (in-app missing form ticket)
+  // 6. POST /api/companies/:companyId/missing-request
   app.post(
     '/api/companies/:companyId/missing-request',
     requireAuth,
@@ -285,7 +277,6 @@ async function startServer() {
     },
   );
 
-  // Vite middleware in development, static dist serving in production
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({

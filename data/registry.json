@@ -1,36 +1,3 @@
 {
-  "users": [
-    {
-      "email": "director@alphatrading.com.my",
-      "fullName": "Tan Sri Ahmad Razak",
-      "role": "Director",
-      "authorizedCompanies": [
-        {
-          "companyId": "alpha-tech",
-          "companyName": "ALPHA TECH SOLUTIONS SDN. BHD.",
-          "registrationNo": "202301018899 (1512345-A)",
-          "driveFolderId": "1A2B3C4D5E6F7G8H9I0J_ALPHA"
-        },
-        {
-          "companyId": "beta-logistics",
-          "companyName": "BETA LOGISTICS (M) SDN. BHD.",
-          "registrationNo": "202101004422 (1401122-K)",
-          "driveFolderId": "9Z8Y7X6W5V4U3T2S1R0Q_BETA"
-        }
-      ]
-    },
-    {
-      "email": "cfo@meridiancapital.com.my",
-      "fullName": "Datin Seri Lim Mei Ling",
-      "role": "Group CFO",
-      "authorizedCompanies": [
-        {
-          "companyId": "meridian-capital",
-          "companyName": "MERIDIAN CAPITAL HOLDINGS SDN. BHD.",
-          "registrationNo": "201901033210 (1342540-P)",
-          "driveFolderId": "5M6E7R8I9D0I1A2N3C4A_MERIDIAN"
-        }
-      ]
-    }
-  ]
+  "users": []
 }
