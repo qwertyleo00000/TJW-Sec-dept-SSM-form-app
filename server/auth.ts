@@ -203,6 +203,14 @@ export function requireAuth(
     return;
   }
 
+  if (user.status === 'pending') {
+    res.status(403).json({
+      error:
+        'Your account registration is pending verification by our Company Secretary department.',
+    });
+    return;
+  }
+
   req.authUser = user;
   next();
 }
@@ -211,6 +219,13 @@ export function requireRole(...allowedRoles: UserRole[]) {
   return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     if (!req.authUser) {
       res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    if (req.authUser.status === 'pending') {
+      res.status(403).json({
+        error:
+          'Your account registration is pending verification by our Company Secretary department.',
+      });
       return;
     }
     if (!allowedRoles.includes(req.authUser.role)) {

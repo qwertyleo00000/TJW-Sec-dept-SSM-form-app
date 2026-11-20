@@ -26,12 +26,20 @@ export interface CompanyAssignment {
 export type PublicCompany = CompanyAssignment;
 
 export type UserRole = 'administrator' | 'manager' | 'user';
+export type UserStatus = 'active' | 'pending';
+
+export interface RequestedCompanyInfo {
+  companyName: string;
+  myCoId: string;
+}
 
 export interface AuthenticatedUser {
   email: string;
   fullName: string;
   role: UserRole;
+  status: UserStatus;
   companies: CompanyAssignment[];
+  requestedCompany?: RequestedCompanyInfo;
 }
 
 export interface AuthSessionResponse {

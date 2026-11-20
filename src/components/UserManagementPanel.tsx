@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import {
   Building2,
+  CheckCircle2,
+  Clock,
   Edit,
   Loader2,
   Plus,
@@ -11,7 +13,7 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import type { AuthenticatedUser, CompanyAssignment, UserRole } from '../types';
+import type { AuthenticatedUser, CompanyAssignment, UserRole, UserStatus } from '../types';
 import {
   deleteAdminUser,
   fetchAdminUsers,
@@ -28,16 +30,11 @@ export function UserManagementPanel({ currentUser }: UserManagementPanelProps) {
       email: string;
       fullName: string;
       role: UserRole;
+      status: UserStatus;
       companies: CompanyAssignment[];
+      requestedCompany?: { companyName: string; myCoId: string };
     }>
-  >([
-    {
-      email: currentUser.email,
-      fullName: currentUser.fullName,
-      role: currentUser.role,
-      companies: currentUser.companies,
-    },
-  ]);
+  >([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -47,9 +44,15 @@ export function UserManagementPanel({ currentUser }: UserManagementPanelProps) {
   const [emailInput, setEmailInput] = useState('');
   const [fullNameInput, setFullNameInput] = useState('');
   const [roleInput, setRoleInput] = useState<UserRole>('user');
+  const [statusInput, setStatusInput] = useState<UserStatus>('active');
   const [companiesInput, setCompaniesInput] = useState<CompanyAssignment[]>([
     { myCoId: '', companyName: '', driveFolderId: '' },
   ]);
+  const [requestedCompanyInfo, setRequestedCompanyInfo] = useState<{
+    companyName: string;
+    myCoId: string;
+  } | null>(null);
+
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -77,7 +80,9 @@ export function UserManagementPanel({ currentUser }: UserManagementPanelProps) {
     setEmailInput('');
     setFullNameInput('');
     setRoleInput('user');
+    setStatusInput('active');
     setCompaniesInput([{ myCoId: '', companyName: '', driveFolderId: '' }]);
+    setRequestedCompanyInfo(null);
     setFormError(null);
     setModalOpen(true);
   }
@@ -86,19 +91,53 @@ export function UserManagementPanel({ currentUser }: UserManagementPanelProps) {
     email: string;
     fullName: string;
     role: UserRole;
+    status: UserStatus;
     companies: CompanyAssignment[];
+    requestedCompany?: { companyName: string; myCoId: string };
   }) {
     setIsEdit(true);
     setEmailInput(u.email);
     setFullNameInput(u.fullName);
     setRoleInput(u.role);
+    setStatusInput(u.status);
+    setRequestedCompanyInfo(u.requestedCompany ?? null);
+
+    let initialCompanies = u.companies;
+    if (
+      initialCompanies.length === 0 &&
+      u.requestedCompany?.companyName &&
+      u.requestedCompany?.myCoId
+    ) {
+      initialCompanies = [
+        {
+          companyName: u.requestedCompany.companyName,
+          myCoId: u.requestedCompany.myCoId,
+          driveFolderId: '',
+        },
+      ];
+    }
+
     setCompaniesInput(
-      u.companies.length > 0
-        ? JSON.parse(JSON.stringify(u.companies))
+      initialCompanies.length > 0
+        ? JSON.parse(JSON.stringify(initialCompanies))
         : [{ myCoId: '', companyName: '', driveFolderId: '' }],
     );
     setFormError(null);
     setModalOpen(true);
+  }
+
+  function handleApprovePending(u: {
+    email: string;
+    fullName: string;
+    role: UserRole;
+    status: UserStatus;
+    companies: CompanyAssignment[];
+    requestedCompany?: { companyName: string; myCoId: string };
+  }) {
+    handleOpenEdit({
+      ...u,
+      status: 'active',
+    });
   }
 
   function addCompanyRow() {
@@ -136,6 +175,7 @@ export function UserManagementPanel({ currentUser }: UserManagementPanelProps) {
         email: emailInput,
         fullName: fullNameInput,
         role: roleInput,
+        status: statusInput,
         companies: cleanedCompanies,
         isEdit,
       });
@@ -167,8 +207,8 @@ export function UserManagementPanel({ currentUser }: UserManagementPanelProps) {
           </h2>
           <p className="mt-1 text-sm text-slate-600">
             {isAdmin
-              ? 'Manage administrators, managers, and client users along with their authorized company folder mappings.'
-              : 'Manage client user accounts and assign their authorized company folder mappings.'}
+              ? 'Manage administrators, managers, and client users along with their authorized company folder mappings and registration approvals.'
+              : 'Manage client user accounts, review pending registrations, and assign authorized company folder mappings.'}
           </p>
         </div>
 
@@ -189,9 +229,7 @@ export function UserManagementPanel({ currentUser }: UserManagementPanelProps) {
             <p className="mt-3 text-sm text-slate-600">Loading user directory...</p>
           </div>
         ) : error ? (
-          <div className="p-12 text-center text-red-600 text-sm">
-            {error}
-          </div>
+          <div className="p-12 text-center text-red-600 text-sm">{error}</div>
         ) : users.length === 0 ? (
           <div className="p-12 text-center text-sm text-slate-500">
             No users found in registry.
@@ -202,40 +240,72 @@ export function UserManagementPanel({ currentUser }: UserManagementPanelProps) {
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50 text-xs font-semibold text-slate-600 uppercase tracking-wider">
                   <th className="py-3 px-4">User Details</th>
-                  <th className="py-3 px-4">Role</th>
-                  <th className="py-3 px-4">Authorized Companies</th>
+                  <th className="py-3 px-4">Role &amp; Status</th>
+                  <th className="py-3 px-4">Authorized / Requested Company</th>
                   <th className="py-3 px-4 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200 text-sm">
                 {users.map((u) => {
-                  const isSelf = u.email.toLowerCase() === currentUser.email.toLowerCase();
-                  const isTargetAdminOrManager = u.role === 'administrator' || u.role === 'manager';
+                  const isSelf =
+                    u.email.toLowerCase() === currentUser.email.toLowerCase();
+                  const isTargetAdminOrManager =
+                    u.role === 'administrator' || u.role === 'manager';
                   const canModify = isAdmin || (!isTargetAdminOrManager && !isSelf);
+                  const isPending = u.status === 'pending';
 
                   return (
-                    <tr key={u.email} className="hover:bg-slate-50/70 transition-colors">
+                    <tr
+                      key={u.email}
+                      className={`hover:bg-slate-50/75 transition-colors ${
+                        isPending ? 'bg-amber-50/40' : ''
+                      }`}
+                    >
                       <td className="py-3.5 px-4">
                         <div className="font-semibold text-slate-900">{u.fullName}</div>
                         <div className="text-xs font-mono text-slate-500 mt-0.5">{u.email}</div>
                       </td>
-                      <td className="py-3.5 px-4 whitespace-nowrap">
-                        <span
-                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${
-                            u.role === 'administrator'
-                              ? 'bg-purple-50 text-purple-700 border border-purple-200'
-                              : u.role === 'manager'
-                              ? 'bg-blue-50 text-blue-700 border border-blue-200'
-                              : 'bg-slate-100 text-slate-700 border border-slate-200'
-                          }`}
-                        >
-                          <Shield className="w-3.5 h-3.5" />
-                          <span className="capitalize">{u.role}</span>
-                        </span>
+                      <td className="py-3.5 px-4 whitespace-nowrap space-y-1.5">
+                        <div>
+                          <span
+                            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${
+                              u.role === 'administrator'
+                                ? 'bg-purple-50 text-purple-700 border border-purple-200'
+                                : u.role === 'manager'
+                                ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                                : 'bg-slate-100 text-slate-700 border border-slate-200'
+                            }`}
+                          >
+                            <Shield className="w-3.5 h-3.5" />
+                            <span className="capitalize">{u.role}</span>
+                          </span>
+                        </div>
+                        <div>
+                          {isPending ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-100 text-amber-800 border border-amber-300">
+                              <Clock className="w-3 h-3 text-amber-700" />
+                              <span>Pending Approval</span>
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                              <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                              <span>Active</span>
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="py-3.5 px-4">
                         <div className="space-y-1 max-w-md">
-                          {u.companies.length === 0 ? (
+                          {isPending && u.requestedCompany ? (
+                            <div className="text-xs bg-amber-50 border border-amber-200 rounded-lg p-2.5">
+                              <p className="font-semibold text-amber-900">
+                                Requested: {u.requestedCompany.companyName}
+                              </p>
+                              <p className="font-mono text-[11px] text-amber-800 mt-0.5">
+                                MyCoID: {u.requestedCompany.myCoId}
+                              </p>
+                            </div>
+                          ) : u.companies.length === 0 ? (
                             <span className="text-xs text-slate-400 italic">No companies assigned</span>
                           ) : (
                             u.companies.map((c, idx) => (
@@ -257,6 +327,16 @@ export function UserManagementPanel({ currentUser }: UserManagementPanelProps) {
                       <td className="py-3.5 px-4 text-right whitespace-nowrap">
                         {canModify ? (
                           <div className="inline-flex items-center gap-1.5 justify-end">
+                            {isPending ? (
+                              <button
+                                type="button"
+                                onClick={() => handleApprovePending(u)}
+                                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 transition-colors cursor-pointer"
+                              >
+                                <UserCheck className="w-3.5 h-3.5" />
+                                <span>Approve &amp; Assign Folder</span>
+                              </button>
+                            ) : null}
                             <button
                               type="button"
                               onClick={() => handleOpenEdit(u)}
@@ -289,7 +369,7 @@ export function UserManagementPanel({ currentUser }: UserManagementPanelProps) {
         )}
       </div>
 
-      {/* User Create/Edit Modal */}
+      {/* User Create/Edit/Approve Modal */}
       {modalOpen && (
         <div
           role="dialog"
@@ -317,6 +397,20 @@ export function UserManagementPanel({ currentUser }: UserManagementPanelProps) {
                   className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-800"
                 >
                   {formError}
+                </div>
+              )}
+
+              {requestedCompanyInfo && (
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs space-y-1">
+                  <p className="font-semibold text-amber-900">
+                    User Requested Company (Registration Form):
+                  </p>
+                  <p className="text-amber-800">
+                    <span className="font-medium">Company:</span> {requestedCompanyInfo.companyName}
+                  </p>
+                  <p className="font-mono text-amber-800">
+                    <span className="font-medium">MyCoID:</span> {requestedCompanyInfo.myCoId}
+                  </p>
                 </div>
               )}
 
@@ -351,23 +445,39 @@ export function UserManagementPanel({ currentUser }: UserManagementPanelProps) {
                 </div>
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">
-                  Access Role
-                </label>
-                <select
-                  value={roleInput}
-                  onChange={(e) => setRoleInput(e.target.value as UserRole)}
-                  className="w-full px-3.5 py-2.5 text-sm text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900"
-                >
-                  <option value="user">Client User (Restricted to assigned companies)</option>
-                  <option value="manager">Manager (Can manage files &amp; user accounts)</option>
-                  {isAdmin && (
-                    <option value="administrator">
-                      Administrator (Full unrestricted access)
-                    </option>
-                  )}
-                </select>
+              <div className="grid sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">
+                    Access Role
+                  </label>
+                  <select
+                    value={roleInput}
+                    onChange={(e) => setRoleInput(e.target.value as UserRole)}
+                    className="w-full px-3.5 py-2.5 text-sm text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900"
+                  >
+                    <option value="user">Client User (Restricted to assigned companies)</option>
+                    <option value="manager">Manager (Can manage files &amp; user accounts)</option>
+                    {isAdmin && (
+                      <option value="administrator">
+                        Administrator (Full unrestricted access)
+                      </option>
+                    )}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">
+                    Account Status
+                  </label>
+                  <select
+                    value={statusInput}
+                    onChange={(e) => setStatusInput(e.target.value as UserStatus)}
+                    className="w-full px-3.5 py-2.5 text-sm text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900"
+                  >
+                    <option value="active">Active (Can sign in)</option>
+                    <option value="pending">Pending Approval (Blocked from sign in)</option>
+                  </select>
+                </div>
               </div>
 
               <div>
@@ -474,7 +584,7 @@ export function UserManagementPanel({ currentUser }: UserManagementPanelProps) {
                       <span>Saving...</span>
                     </>
                   ) : (
-                    <span>Save User</span>
+                    <span>Save User &amp; Assign Access</span>
                   )}
                 </button>
               </div>

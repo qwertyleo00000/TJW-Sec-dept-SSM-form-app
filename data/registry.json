@@ -1,3 +1,11 @@
 {
-  "users": []
+  "users": [
+    {
+      "email": "qwertyleo00000@gmail.com",
+      "fullName": "Administrator",
+      "role": "administrator",
+      "status": "active",
+      "companies": []
+    }
+  ]
 }

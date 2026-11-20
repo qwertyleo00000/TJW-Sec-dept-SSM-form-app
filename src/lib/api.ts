@@ -80,6 +80,21 @@ export async function verifyOtp(
   return data;
 }
 
+export async function registerNewAccount(payload: {
+  fullName: string;
+  email: string;
+  companyName: string;
+  myCoId: string;
+}): Promise<{ message: string }> {
+  const res = await fetch('/api/auth/register', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse(res);
+}
+
 export async function fetchCurrentSession(): Promise<AuthSessionResponse | null> {
   const res = await fetch('/api/auth/me', {
     method: 'GET',
@@ -223,7 +238,9 @@ export async function fetchAdminUsers(): Promise<
     email: string;
     fullName: string;
     role: UserRole;
+    status: 'active' | 'pending';
     companies: CompanyAssignment[];
+    requestedCompany?: { companyName: string; myCoId: string };
   }>
 > {
   const res = await fetch('/api/admin/users', {
@@ -236,7 +253,9 @@ export async function fetchAdminUsers(): Promise<
       email: string;
       fullName: string;
       role: UserRole;
+      status: 'active' | 'pending';
       companies: CompanyAssignment[];
+      requestedCompany?: { companyName: string; myCoId: string };
     }>;
   }>(res);
   return data.users;
@@ -246,6 +265,7 @@ export async function saveAdminUser(userData: {
   email: string;
   fullName: string;
   role: UserRole;
+  status?: 'active' | 'pending';
   companies: CompanyAssignment[];
   isEdit?: boolean;
 }): Promise<void> {

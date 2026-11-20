@@ -29,6 +29,7 @@ import {
   getAllAccessibleCompanies,
   getAllUsers,
   getAuthorizedCompany,
+  registerUser,
   upsertUser,
 } from './server/registry.ts';
 
@@ -49,7 +50,51 @@ async function startServer() {
   app.use(express.json({ limit: '2mb' }));
   app.use(cookieParser());
 
-  // 1. Auth APIs
+  // 1. Auth & Registration APIs
+  app.post('/api/auth/register', (req, res) => {
+    try {
+      const fullName =
+        typeof req.body?.fullName === 'string' ? req.body.fullName.trim() : '';
+      const email = typeof req.body?.email === 'string' ? req.body.email.trim() : '';
+      const companyName =
+        typeof req.body?.companyName === 'string' ? req.body.companyName.trim() : '';
+      const myCoId =
+        typeof req.body?.myCoId === 'string' ? req.body.myCoId.trim() : '';
+
+      if (!fullName || !email || !companyName || !myCoId) {
+        res.status(400).json({
+          error: 'All fields (Full Name, Email Address, Company Name, SSM Registration No. / MyCoID) are required.',
+        });
+        return;
+      }
+
+      const normalizedEmail = email.toLowerCase();
+      const existing = findUserByEmail(normalizedEmail);
+      if (existing) {
+        res.status(409).json({
+          error: 'An account with this email address already exists. Please sign in.',
+        });
+        return;
+      }
+
+      const newUser = registerUser({
+        fullName,
+        email: normalizedEmail,
+        companyName,
+        myCoId,
+      });
+
+      res.status(201).json({
+        message: 'Registration submitted successfully. Pending Company Secretary verification.',
+        user: newUser,
+      });
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'Registration failed.';
+      res.status(400).json({ error: message });
+    }
+  });
+
   app.post('/api/auth/request-otp', (req, res) => {
     const email = typeof req.body?.email === 'string' ? req.body.email.trim() : '';
     if (!email) {
@@ -61,7 +106,15 @@ async function startServer() {
     if (!user) {
       res.status(403).json({
         error:
-          'This email address is not registered in the CoSec Vault Client Access Registry. Please contact your Company Secretary.',
+          'This email address is not registered in the CoSec Vault Client Access Registry. Please contact your Company Secretary or register a new account.',
+      });
+      return;
+    }
+
+    if (user.status === 'pending') {
+      res.status(403).json({
+        error:
+          'Your account registration is pending verification by our Company Secretary department.',
       });
       return;
     }
@@ -90,6 +143,14 @@ async function startServer() {
       return;
     }
 
+    if (user.status === 'pending') {
+      res.status(403).json({
+        error:
+          'Your account registration is pending verification by our Company Secretary department.',
+      });
+      return;
+    }
+
     const validOtp = verifyOtpForEmail(user.email, otp);
     if (!validOtp) {
       res.status(401).json({
@@ -106,6 +167,7 @@ async function startServer() {
         email: user.email,
         fullName: user.fullName,
         role: user.role,
+        status: user.status,
         companies: user.companies,
       },
       authorizedCompanies: getAllAccessibleCompanies(user),
@@ -121,6 +183,7 @@ async function startServer() {
         email: user.email,
         fullName: user.fullName,
         role: user.role,
+        status: user.status,
         companies: user.companies,
       },
       authorizedCompanies: getAllAccessibleCompanies(user),
@@ -361,6 +424,7 @@ async function startServer() {
       const fullName =
         typeof req.body?.fullName === 'string' ? req.body.fullName.trim() : '';
       const role = typeof req.body?.role === 'string' ? req.body.role.trim() : 'user';
+      const status = typeof req.body?.status === 'string' ? req.body.status.trim() : 'active';
       const companies = Array.isArray(req.body?.companies) ? req.body.companies : [];
 
       if (!email || !fullName) {
@@ -368,18 +432,22 @@ async function startServer() {
         return;
       }
 
-      if (role !== 'user' && role !== 'manager' && role !== 'administrator') {
-        res.status(400).json({ error: 'Invalid role specified.' });
-        return;
-      }
-
-      // If caller is manager, they can only create/manage 'user' accounts
       if (caller.role === 'manager' && role !== 'user') {
         res.status(403).json({ error: 'Managers can only create or manage standard user accounts.' });
         return;
       }
 
-      const updated = upsertUser({ email, fullName, role, companies });
+      const existing = findUserByEmail(email);
+      const requestedCompany = existing ? existing.requestedCompany : undefined;
+
+      const updated = upsertUser({
+        email,
+        fullName,
+        role: role as any,
+        status: status as any,
+        companies,
+        requestedCompany,
+      });
       res.status(201).json({ user: updated });
     },
   );
@@ -398,7 +466,6 @@ async function startServer() {
         return;
       }
 
-      // If caller is manager, they cannot modify managers or administrators
       if (caller.role === 'manager' && existing.role !== 'user') {
         res.status(403).json({ error: 'Managers cannot modify administrator or manager accounts.' });
         return;
@@ -410,6 +477,8 @@ async function startServer() {
           : existing.fullName;
       const role =
         typeof req.body?.role === 'string' ? req.body.role.trim() : existing.role;
+      const status =
+        typeof req.body?.status === 'string' ? req.body.status.trim() : existing.status;
       const companies = Array.isArray(req.body?.companies)
         ? req.body.companies
         : existing.companies;
@@ -419,7 +488,15 @@ async function startServer() {
         return;
       }
 
-      const updated = upsertUser({ email: targetEmail, fullName, role, companies });
+      // If status is changed to active and companies are assigned, clear requestedCompany or keep for history
+      const updated = upsertUser({
+        email: targetEmail,
+        fullName,
+        role: role as any,
+        status: status as any,
+        companies,
+        requestedCompany: existing.requestedCompany,
+      });
       res.json({ user: updated });
     },
   );
@@ -511,7 +588,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`CoSec Vault RBAC server running on http://0.0.0.0:${PORT}`);
+    console.log(`CoSec Vault Registration & RBAC server running on http://0.0.0.0:${PORT}`);
   });
 }
 

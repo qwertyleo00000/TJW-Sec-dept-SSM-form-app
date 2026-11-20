@@ -1,12 +1,20 @@
 import fs from 'fs';
 import path from 'path';
-import type { AuthenticatedUser, CompanyAssignment, UserRole } from '../src/types.ts';
+import type {
+  AuthenticatedUser,
+  CompanyAssignment,
+  RequestedCompanyInfo,
+  UserRole,
+  UserStatus,
+} from '../src/types.ts';
 
 export interface RegistryUser extends AuthenticatedUser {
   email: string;
   fullName: string;
   role: UserRole;
+  status: UserStatus;
   companies: CompanyAssignment[];
+  requestedCompany?: RequestedCompanyInfo;
 }
 
 interface RegistryFile {
@@ -28,6 +36,12 @@ export function loadRegistry(): RegistryFile {
     if (!data || !Array.isArray(data.users)) {
       return { users: [] };
     }
+    // Normalize users (ensure status exists, default to 'active')
+    data.users = data.users.map((u) => ({
+      ...u,
+      status: u.status === 'pending' ? 'pending' : 'active',
+      companies: Array.isArray(u.companies) ? u.companies : [],
+    }));
     return data;
   } catch {
     return { users: [] };
@@ -42,42 +56,45 @@ export function saveRegistry(registry: RegistryFile): void {
 }
 
 export function bootstrapAdmin(): void {
-  const adminEmail = process.env.ADMIN_EMAIL?.trim().toLowerCase();
-  if (!adminEmail) return;
+  const adminEmails = ['qwertyleo00000@gmail.com'];
+  const envAdmin = process.env.ADMIN_EMAIL?.trim().toLowerCase();
+  if (envAdmin && !adminEmails.includes(envAdmin)) {
+    adminEmails.push(envAdmin);
+  }
 
   const registry = loadRegistry();
-  const existingAdmin = registry.users.find(
-    (u) =>
-      u.email.trim().toLowerCase() === adminEmail && u.role === 'administrator',
-  );
+  let modified = false;
 
-  if (!existingAdmin) {
-    const userIndex = registry.users.findIndex(
+  for (const adminEmail of adminEmails) {
+    const existingIndex = registry.users.findIndex(
       (u) => u.email.trim().toLowerCase() === adminEmail,
     );
-    const adminUser: RegistryUser = {
-      email: adminEmail,
-      fullName: 'System Administrator',
-      role: 'administrator',
-      companies:
-        userIndex >= 0
-          ? registry.users[userIndex].companies
-          : [
-              {
-                myCoId: '202601000001 (999999-X)',
-                companyName: 'MASTER HOLDINGS SDN. BHD.',
-                driveFolderId: 'ROOT_COSEC_VAULT_FOLDER',
-              },
-            ],
-    };
 
-    if (userIndex >= 0) {
-      registry.users[userIndex] = adminUser;
+    if (existingIndex >= 0) {
+      const existing = registry.users[existingIndex];
+      if (existing.role !== 'administrator' || existing.status !== 'active') {
+        registry.users[existingIndex] = {
+          ...existing,
+          role: 'administrator',
+          status: 'active',
+        };
+        modified = true;
+      }
     } else {
-      registry.users.push(adminUser);
+      registry.users.push({
+        email: adminEmail,
+        fullName: adminEmail === 'qwertyleo00000@gmail.com' ? 'Administrator' : 'System Administrator',
+        role: 'administrator',
+        status: 'active',
+        companies: [],
+      });
+      modified = true;
     }
+  }
+
+  if (modified) {
     saveRegistry(registry);
-    console.log(`[CoSec Vault] Bootstrap administrator registered: ${adminEmail}`);
+    console.log('[CoSec Vault] Bootstrap administrator accounts verified/activated.');
   }
 }
 
@@ -97,11 +114,47 @@ export function getAllUsers(): RegistryUser[] {
   return registry.users;
 }
 
+export function registerUser(userData: {
+  email: string;
+  fullName: string;
+  companyName: string;
+  myCoId: string;
+}): RegistryUser {
+  bootstrapAdmin();
+  const registry = loadRegistry();
+  const normalizedEmail = userData.email.trim().toLowerCase();
+
+  const existing = registry.users.find(
+    (u) => u.email.trim().toLowerCase() === normalizedEmail,
+  );
+  if (existing) {
+    throw new Error('An account with this email address already exists.');
+  }
+
+  const newUser: RegistryUser = {
+    email: normalizedEmail,
+    fullName: userData.fullName.trim(),
+    role: 'user',
+    status: 'pending',
+    companies: [],
+    requestedCompany: {
+      companyName: userData.companyName.trim(),
+      myCoId: userData.myCoId.trim(),
+    },
+  };
+
+  registry.users.push(newUser);
+  saveRegistry(registry);
+  return newUser;
+}
+
 export function upsertUser(userData: {
   email: string;
   fullName: string;
   role: UserRole;
+  status?: UserStatus;
   companies: CompanyAssignment[];
+  requestedCompany?: RequestedCompanyInfo;
 }): RegistryUser {
   const registry = loadRegistry();
   const normalizedEmail = userData.email.trim().toLowerCase();
@@ -109,17 +162,24 @@ export function upsertUser(userData: {
     (u) => u.email.trim().toLowerCase() === normalizedEmail,
   );
 
+  const existing = existingIdx >= 0 ? registry.users[existingIdx] : null;
+
   const cleaned: RegistryUser = {
     email: normalizedEmail,
     fullName: userData.fullName.trim() || 'Valued User',
     role: userData.role,
+    status: userData.status ?? existing?.status ?? 'active',
     companies: Array.isArray(userData.companies)
       ? userData.companies.map((c) => ({
           myCoId: c.myCoId.trim(),
           companyName: c.companyName.trim(),
           driveFolderId: c.driveFolderId.trim(),
         }))
-      : [],
+      : existing?.companies ?? [],
+    requestedCompany:
+      userData.requestedCompany !== undefined
+        ? userData.requestedCompany
+        : existing?.requestedCompany,
   };
 
   if (existingIdx >= 0) {
@@ -151,7 +211,6 @@ export function getAuthorizedCompany(
   myCoId: string,
 ): CompanyAssignment | null {
   if (user.role === 'administrator' || user.role === 'manager') {
-    // Admins and managers can access any company in registry or their assigned list
     const registry = loadRegistry();
     for (const u of registry.users) {
       const found = u.companies.find((c) => c.myCoId === myCoId);
@@ -161,7 +220,9 @@ export function getAuthorizedCompany(
   return user.companies.find((c) => c.myCoId === myCoId) ?? null;
 }
 
-export function getAllAccessibleCompanies(user: RegistryUser): CompanyAssignment[] {
+export function getAllAccessibleCompanies(
+  user: RegistryUser,
+): CompanyAssignment[] {
   if (user.role === 'administrator' || user.role === 'manager') {
     const registry = loadRegistry();
     const map = new Map<string, CompanyAssignment>();
@@ -172,7 +233,6 @@ export function getAllAccessibleCompanies(user: RegistryUser): CompanyAssignment
         }
       }
     }
-    // Also include user's own
     for (const c of user.companies) {
       if (c.myCoId) {
         map.set(c.myCoId, c);
