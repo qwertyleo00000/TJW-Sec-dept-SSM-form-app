@@ -18,9 +18,7 @@ export interface StatutoryDocument {
 export interface CompanyAssignment {
   myCoId: string;
   companyName: string;
-  driveFolderId: string;
   registrationNo?: string;
-  companyId?: string;
 }
 
 export type PublicCompany = CompanyAssignment;
@@ -77,7 +75,8 @@ export type AuditActionType =
   | 'USER_REGISTERED'
   | 'USER_UPDATED'
   | 'USER_DELETED'
-  | 'PASSWORD_CHANGED';
+  | 'PASSWORD_CHANGED'
+  | 'EMAIL_NOTIFICATION_SENT';
 
 export interface AuditLogEntry {
   id: string;
@@ -92,4 +91,3 @@ export interface AuditLogEntry {
   details?: string;
   ipAddress?: string;
 }
-

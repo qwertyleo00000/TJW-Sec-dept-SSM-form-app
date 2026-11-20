@@ -15,7 +15,8 @@ export type AuditActionType =
   | 'USER_REGISTERED'
   | 'USER_UPDATED'
   | 'USER_DELETED'
-  | 'PASSWORD_CHANGED';
+  | 'PASSWORD_CHANGED'
+  | 'EMAIL_NOTIFICATION_SENT';
 
 export interface AuditLogEntry {
   id: string;

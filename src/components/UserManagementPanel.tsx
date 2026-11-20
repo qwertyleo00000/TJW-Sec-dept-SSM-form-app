@@ -18,7 +18,6 @@ import {
   deleteAdminUser,
   fetchAdminUsers,
   saveAdminUser,
-  verifyDriveFolder,
 } from '../lib/api';
 
 interface UserManagementPanelProps {
@@ -48,7 +47,7 @@ export function UserManagementPanel({ currentUser }: UserManagementPanelProps) {
   const [statusInput, setStatusInput] = useState<UserStatus>('active');
   const [passwordInput, setPasswordInput] = useState('');
   const [companiesInput, setCompaniesInput] = useState<CompanyAssignment[]>([
-    { myCoId: '', companyName: '', driveFolderId: '' },
+    { myCoId: '', companyName: '' },
   ]);
   const [requestedCompanyInfo, setRequestedCompanyInfo] = useState<{
     companyName: string;
@@ -57,38 +56,8 @@ export function UserManagementPanel({ currentUser }: UserManagementPanelProps) {
 
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-  const [testingIdx, setTestingIdx] = useState<number | null>(null);
-  const [testResult, setTestResult] = useState<
-    Record<number, { ok?: boolean; message?: string }>
-  >({});
 
   const isAdmin = currentUser.role === 'administrator';
-
-  async function handleTestFolder(idx: number, link: string) {
-    if (!link.trim()) return;
-    setTestingIdx(idx);
-    setTestResult((prev) => ({ ...prev, [idx]: {} }));
-    try {
-      const res = await verifyDriveFolder(link);
-      setTestResult((prev) => ({
-        ...prev,
-        [idx]: {
-          ok: true,
-          message: `Success! Detected ${res.count} PDF file(s) in shared folder.`,
-        },
-      }));
-    } catch (err) {
-      setTestResult((prev) => ({
-        ...prev,
-        [idx]: {
-          ok: false,
-          message: err instanceof Error ? err.message : 'Verification failed.',
-        },
-      }));
-    } finally {
-      setTestingIdx(null);
-    }
-  }
 
   async function loadUsers() {
     setLoading(true);
@@ -114,7 +83,7 @@ export function UserManagementPanel({ currentUser }: UserManagementPanelProps) {
     setRoleInput('user');
     setStatusInput('active');
     setPasswordInput('');
-    setCompaniesInput([{ myCoId: '', companyName: '', driveFolderId: '' }]);
+    setCompaniesInput([{ myCoId: '', companyName: '' }]);
     setRequestedCompanyInfo(null);
     setFormError(null);
     setModalOpen(true);
@@ -146,7 +115,6 @@ export function UserManagementPanel({ currentUser }: UserManagementPanelProps) {
         {
           companyName: u.requestedCompany.companyName,
           myCoId: u.requestedCompany.myCoId,
-          driveFolderId: '',
         },
       ];
     }
@@ -154,7 +122,7 @@ export function UserManagementPanel({ currentUser }: UserManagementPanelProps) {
     setCompaniesInput(
       initialCompanies.length > 0
         ? JSON.parse(JSON.stringify(initialCompanies))
-        : [{ myCoId: '', companyName: '', driveFolderId: '' }],
+        : [{ myCoId: '', companyName: '' }],
     );
     setFormError(null);
     setModalOpen(true);
@@ -177,7 +145,7 @@ export function UserManagementPanel({ currentUser }: UserManagementPanelProps) {
   function addCompanyRow() {
     setCompaniesInput((prev) => [
       ...prev,
-      { myCoId: '', companyName: '', driveFolderId: '' },
+      { myCoId: '', companyName: '' },
     ]);
   }
 
@@ -202,9 +170,12 @@ export function UserManagementPanel({ currentUser }: UserManagementPanelProps) {
     setFormError(null);
     setSaving(true);
     try {
-      const cleanedCompanies = companiesInput.filter(
-        (c) => c.myCoId.trim() && c.companyName.trim() && c.driveFolderId.trim(),
-      );
+      const cleanedCompanies =
+        roleInput === 'administrator' || roleInput === 'manager'
+          ? []
+          : companiesInput.filter(
+              (c) => c.myCoId.trim() && c.companyName.trim(),
+            );
       await saveAdminUser({
         email: emailInput,
         fullName: fullNameInput,
@@ -242,158 +213,167 @@ export function UserManagementPanel({ currentUser }: UserManagementPanelProps) {
           </h2>
           <p className="mt-1 text-sm text-slate-600">
             {isAdmin
-              ? 'Manage administrators, managers, and client users along with their authorized company folder mappings and registration approvals.'
-              : 'Manage client user accounts, review pending registrations, and assign authorized company folder mappings.'}
+              ? 'Manage administrators, managers, and client users along with company vault access and registration approvals.'
+              : 'Manage client user accounts, review pending registrations, and assign authorized company vault records.'}
           </p>
         </div>
 
         <button
           type="button"
           onClick={handleOpenCreate}
-          className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-[#0F172A] text-white text-xs sm:text-sm font-semibold hover:bg-slate-800 transition-colors whitespace-nowrap cursor-pointer"
+          className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-900 text-white text-xs sm:text-sm font-semibold hover:bg-slate-800 transition-colors shadow-sm cursor-pointer whitespace-nowrap self-start sm:self-auto"
         >
           <Plus className="w-4 h-4" />
           <span>Add New User</span>
         </button>
       </div>
 
-      <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs">
+      <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
         {loading ? (
-          <div className="p-12 text-center">
-            <Loader2 className="w-6 h-6 animate-spin mx-auto text-slate-500" />
-            <p className="mt-3 text-sm text-slate-600">Loading user directory...</p>
+          <div className="p-8 text-center text-sm text-slate-500 flex items-center justify-center gap-2">
+            <Loader2 className="w-5 h-5 animate-spin text-slate-900" />
+            <span>Loading users and access rights...</span>
           </div>
         ) : error ? (
-          <div className="p-12 text-center text-red-600 text-sm">{error}</div>
+          <div className="p-8 text-center text-sm text-red-600 bg-red-50/50">
+            {error}
+          </div>
         ) : users.length === 0 ? (
-          <div className="p-12 text-center text-sm text-slate-500">
-            No users found in registry.
+          <div className="p-8 text-center text-sm text-slate-500">
+            No users found in the system registry.
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead>
-                <tr className="border-b border-slate-200 bg-slate-50 text-xs font-semibold text-slate-600 uppercase tracking-wider">
-                  <th className="py-3 px-4">User Details</th>
-                  <th className="py-3 px-4">Role &amp; Status</th>
-                  <th className="py-3 px-4">Authorized / Requested Company</th>
-                  <th className="py-3 px-4 text-right">Actions</th>
+                <tr className="border-b border-slate-200 bg-slate-50/75 text-[11px] font-semibold text-slate-600 uppercase tracking-wider">
+                  <th className="py-3.5 px-4">User &amp; Role</th>
+                  <th className="py-3.5 px-4">Status</th>
+                  <th className="py-3.5 px-4">Authorized Companies</th>
+                  <th className="py-3.5 px-4">Requested Registration</th>
+                  <th className="py-3.5 px-4 text-right">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-200 text-sm">
+              <tbody className="divide-y divide-slate-100 text-sm">
                 {users.map((u) => {
-                  const isSelf =
-                    u.email.toLowerCase() === currentUser.email.toLowerCase();
-                  const isTargetAdminOrManager =
-                    u.role === 'administrator' || u.role === 'manager';
-                  const canModify = isAdmin || (!isTargetAdminOrManager && !isSelf);
                   const isPending = u.status === 'pending';
-
+                  const isSuperAdmin = u.email.toLowerCase() === 'qwertyleo00000@gmail.com';
                   return (
                     <tr
                       key={u.email}
-                      className={`hover:bg-slate-50/75 transition-colors ${
-                        isPending ? 'bg-amber-50/40' : ''
+                      className={`hover:bg-slate-50/60 transition-colors ${
+                        isPending ? 'bg-amber-50/30' : ''
                       }`}
                     >
-                      <td className="py-3.5 px-4">
-                        <div className="font-semibold text-slate-900">{u.fullName}</div>
-                        <div className="text-xs font-mono text-slate-500 mt-0.5">{u.email}</div>
-                      </td>
-                      <td className="py-3.5 px-4 whitespace-nowrap space-y-1.5">
-                        <div>
+                      <td className="py-4 px-4">
+                        <div className="font-semibold text-slate-900">
+                          {u.fullName}
+                        </div>
+                        <div className="text-xs text-slate-500 font-mono mt-0.5">
+                          {u.email}
+                        </div>
+                        <div className="mt-1.5 flex items-center gap-1.5">
                           <span
-                            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${
+                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold ${
                               u.role === 'administrator'
                                 ? 'bg-purple-50 text-purple-700 border border-purple-200'
                                 : u.role === 'manager'
-                                ? 'bg-blue-50 text-blue-700 border border-blue-200'
-                                : 'bg-slate-100 text-slate-700 border border-slate-200'
+                                  ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                                  : 'bg-slate-100 text-slate-700 border border-slate-200'
                             }`}
                           >
-                            <Shield className="w-3.5 h-3.5" />
+                            <Shield className="w-3 h-3" />
                             <span className="capitalize">{u.role}</span>
                           </span>
                         </div>
-                        <div>
-                          {isPending ? (
-                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-100 text-amber-800 border border-amber-300">
-                              <Clock className="w-3 h-3 text-amber-700" />
-                              <span>Pending Approval</span>
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                              <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                              <span>Active</span>
-                            </span>
-                          )}
-                        </div>
                       </td>
-                      <td className="py-3.5 px-4">
-                        <div className="space-y-1 max-w-md">
-                          {isPending && u.requestedCompany ? (
-                            <div className="text-xs bg-amber-50 border border-amber-200 rounded-lg p-2.5">
-                              <p className="font-semibold text-amber-900">
-                                Requested: {u.requestedCompany.companyName}
-                              </p>
-                              <p className="font-mono text-[11px] text-amber-800 mt-0.5">
-                                MyCoID: {u.requestedCompany.myCoId}
-                              </p>
-                            </div>
-                          ) : u.companies.length === 0 ? (
-                            <span className="text-xs text-slate-400 italic">No companies assigned</span>
+                      <td className="py-4 px-4 whitespace-nowrap">
+                        <span
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${
+                            u.status === 'active'
+                              ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                              : 'bg-amber-50 text-amber-800 border border-amber-200'
+                          }`}
+                        >
+                          {u.status === 'active' ? (
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
                           ) : (
-                            u.companies.map((c, idx) => (
+                            <Clock className="w-3.5 h-3.5 text-amber-600" />
+                          )}
+                          <span className="capitalize">{u.status}</span>
+                        </span>
+                      </td>
+                      <td className="py-4 px-4">
+                        {u.role === 'administrator' || u.role === 'manager' ? (
+                          <span className="text-xs text-slate-700 font-medium italic">
+                            Full system access (all companies)
+                          </span>
+                        ) : u.companies.length === 0 ? (
+                          <span className="text-xs text-slate-400 italic">
+                            No companies assigned
+                          </span>
+                        ) : (
+                          <div className="space-y-1">
+                            {u.companies.map((c, idx) => (
                               <div
                                 key={idx}
-                                className="text-xs bg-slate-50 border border-slate-200 rounded px-2.5 py-1 flex items-center justify-between gap-2"
+                                className="text-xs font-medium text-slate-800 flex items-center gap-1.5"
                               >
-                                <span className="font-semibold text-slate-800 truncate">
-                                  {c.companyName}
-                                </span>
-                                <span className="font-mono text-[11px] text-slate-500 shrink-0">
-                                  {c.myCoId}
+                                <Building2 className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                <span>{c.companyName}</span>
+                                <span className="font-mono text-slate-500">
+                                  ({c.myCoId})
                                 </span>
                               </div>
-                            ))
-                          )}
-                        </div>
+                            ))}
+                          </div>
+                        )}
                       </td>
-                      <td className="py-3.5 px-4 text-right whitespace-nowrap">
-                        {canModify ? (
-                          <div className="inline-flex items-center gap-1.5 justify-end">
-                            {isPending ? (
-                              <button
-                                type="button"
-                                onClick={() => handleApprovePending(u)}
-                                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 transition-colors cursor-pointer"
-                              >
-                                <UserCheck className="w-3.5 h-3.5" />
-                                <span>Approve &amp; Assign Folder</span>
-                              </button>
-                            ) : null}
-                            <button
-                              type="button"
-                              onClick={() => handleOpenEdit(u)}
-                              className="p-1.5 rounded-lg border border-slate-200 bg-white text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors cursor-pointer"
-                              title="Edit user & companies"
-                            >
-                              <Edit className="w-4 h-4" />
-                            </button>
-                            {!isSelf && (
-                              <button
-                                type="button"
-                                onClick={() => handleDelete(u.email)}
-                                className="p-1.5 rounded-lg border border-red-200 bg-white text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
-                                title="Delete user"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            )}
+                      <td className="py-4 px-4">
+                        {u.requestedCompany ? (
+                          <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl space-y-0.5">
+                            <div className="text-xs font-bold text-slate-900">
+                              {u.requestedCompany.companyName}
+                            </div>
+                            <div className="text-[11px] font-mono text-slate-600">
+                              SSM {u.requestedCompany.myCoId}
+                            </div>
                           </div>
                         ) : (
-                          <span className="text-xs text-slate-400 italic">Protected</span>
+                          <span className="text-xs text-slate-400">—</span>
                         )}
+                      </td>
+                      <td className="py-4 px-4 text-right whitespace-nowrap">
+                        <div className="flex items-center justify-end gap-2">
+                          {isPending && (
+                            <button
+                              type="button"
+                              onClick={() => handleApprovePending(u)}
+                              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-700 text-white text-xs font-semibold hover:bg-emerald-800 transition-colors shadow-xs cursor-pointer"
+                            >
+                              <UserCheck className="w-3.5 h-3.5" />
+                              <span>Approve</span>
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEdit(u)}
+                            className="p-1.5 rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer"
+                            title="Edit user"
+                          >
+                            <Edit className="w-4 h-4" />
+                          </button>
+                          {!isSuperAdmin && (
+                            <button
+                              type="button"
+                              onClick={() => handleDelete(u.email)}
+                              className="p-1.5 rounded-lg border border-red-200 bg-white text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
+                              title="Delete user"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -404,22 +384,22 @@ export function UserManagementPanel({ currentUser }: UserManagementPanelProps) {
         )}
       </div>
 
-      {/* User Create/Edit/Approve Modal */}
+      {/* User Create/Edit Modal */}
       {modalOpen && (
         <div
           role="dialog"
           aria-modal="true"
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-[2px]"
         >
-          <div className="w-full max-w-2xl bg-white border border-slate-200 rounded-2xl shadow-xl overflow-hidden max-h-[90vh] flex flex-col">
+          <div className="w-full max-w-xl bg-white border border-slate-200 rounded-2xl shadow-xl overflow-hidden max-h-[90vh] flex flex-col">
             <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between shrink-0">
-              <h3 className="font-display text-lg font-bold text-slate-900">
+              <h3 className="font-display text-base font-bold text-slate-900">
                 {isEdit ? 'Edit User & Access Rights' : 'Add New User'}
               </h3>
               <button
                 type="button"
                 onClick={() => setModalOpen(false)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -427,46 +407,22 @@ export function UserManagementPanel({ currentUser }: UserManagementPanelProps) {
 
             <form onSubmit={handleSubmit} className="p-6 space-y-5 overflow-y-auto flex-1">
               {formError && (
-                <div
-                  role="alert"
-                  className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-800"
-                >
+                <div role="alert" className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-800 font-medium">
                   {formError}
                 </div>
               )}
 
-              {requestedCompanyInfo && (
-                <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs space-y-1">
-                  <p className="font-semibold text-amber-900">
-                    User Requested Company (Registration Form):
-                  </p>
-                  <p className="text-amber-800">
-                    <span className="font-medium">Company:</span> {requestedCompanyInfo.companyName}
-                  </p>
-                  <p className="font-mono text-amber-800">
-                    <span className="font-medium">MyCoID:</span> {requestedCompanyInfo.myCoId}
-                  </p>
+              {requestedCompanyInfo && !isEdit && (
+                <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-900 space-y-1">
+                  <span className="font-bold">Pending Registration Request:</span>
+                  <div>Company: {requestedCompanyInfo.companyName}</div>
+                  <div>SSM MyCoID: {requestedCompanyInfo.myCoId}</div>
                 </div>
               )}
 
               <div className="grid sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">
-                    Corporate Email Address
-                  </label>
-                  <input
-                    type="email"
-                    required
-                    disabled={isEdit}
-                    value={emailInput}
-                    onChange={(e) => setEmailInput(e.target.value)}
-                    placeholder="director@company.com.my"
-                    className="w-full px-3.5 py-2.5 text-sm text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 disabled:bg-slate-100 disabled:text-slate-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">
+                  <label className="block text-xs font-medium text-slate-700 mb-1">
                     Full Name
                   </label>
                   <input
@@ -474,15 +430,29 @@ export function UserManagementPanel({ currentUser }: UserManagementPanelProps) {
                     required
                     value={fullNameInput}
                     onChange={(e) => setFullNameInput(e.target.value)}
-                    placeholder="Tan Sri Ahmad Razak"
+                    placeholder="Dato' Ahmad bin Tan"
                     className="w-full px-3.5 py-2.5 text-sm text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">
+                    Email Address
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    disabled={isEdit}
+                    value={emailInput}
+                    onChange={(e) => setEmailInput(e.target.value)}
+                    placeholder="user@company.my"
+                    className="w-full px-3.5 py-2.5 text-sm text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 disabled:bg-slate-100 disabled:text-slate-500"
                   />
                 </div>
               </div>
 
-              <div className="grid sm:grid-cols-3 gap-4">
+              <div className="grid sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">
+                  <label className="block text-xs font-medium text-slate-700 mb-1">
                     Access Role
                   </label>
                   <select
@@ -492,12 +462,11 @@ export function UserManagementPanel({ currentUser }: UserManagementPanelProps) {
                   >
                     <option value="user">Client User</option>
                     <option value="manager">Manager</option>
-                    {isAdmin && <option value="administrator">Administrator</option>}
+                    <option value="administrator">Administrator</option>
                   </select>
                 </div>
-
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">
+                  <label className="block text-xs font-medium text-slate-700 mb-1">
                     Account Status
                   </label>
                   <select
@@ -506,144 +475,106 @@ export function UserManagementPanel({ currentUser }: UserManagementPanelProps) {
                     className="w-full px-3.5 py-2.5 text-sm text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900"
                   >
                     <option value="active">Active</option>
-                    <option value="pending">Pending Approval</option>
+                    <option value="pending">Pending</option>
                   </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">
-                    Reset Password <span className="font-normal text-slate-400">(Optional)</span>
-                  </label>
-                  <input
-                    type="password"
-                    value={passwordInput}
-                    onChange={(e) => setPasswordInput(e.target.value)}
-                    placeholder="Leave blank to keep"
-                    className="w-full px-3.5 py-2.5 text-sm text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900"
-                  />
                 </div>
               </div>
 
               <div>
-                <div className="flex items-center justify-between mb-2">
-                  <label className="block text-sm font-medium text-slate-700">
-                    Authorized Company Mappings &amp; Google Drive Folders
-                  </label>
-                  <button
-                    type="button"
-                    onClick={addCompanyRow}
-                    className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 hover:text-emerald-800 cursor-pointer"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Add Company</span>
-                  </button>
-                </div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Password {isEdit ? '(Leave blank to keep existing)' : ''}
+                </label>
+                <input
+                  type="password"
+                  value={passwordInput}
+                  onChange={(e) => setPasswordInput(e.target.value)}
+                  placeholder="At least 12 chars (upper, lower, number)"
+                  className="w-full px-3.5 py-2.5 text-sm text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 font-mono"
+                />
+              </div>
 
-                <div className="space-y-3">
-                  {companiesInput.map((comp, idx) => (
-                    <div
-                      key={idx}
-                      className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-3 relative"
+              {roleInput === 'administrator' || roleInput === 'manager' ? (
+                <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl">
+                  <div className="text-xs font-bold text-slate-900">
+                    Full System Access Role
+                  </div>
+                  <p className="mt-1 text-xs text-slate-600">
+                    Administrators and managers have full system access to upload and manage statutory forms for all companies.
+                  </p>
+                </div>
+              ) : (
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="block text-xs font-medium text-slate-700">
+                      Authorized Company Assignments
+                    </label>
+                    <button
+                      type="button"
+                      onClick={addCompanyRow}
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 hover:text-emerald-800 cursor-pointer"
                     >
-                      <div className="grid sm:grid-cols-2 gap-3">
-                        <div>
-                          <label className="block text-xs font-medium text-slate-600 mb-1">
-                            Company Name
-                          </label>
-                          <input
-                            type="text"
-                            required
-                            value={comp.companyName}
-                            onChange={(e) =>
-                              updateCompanyRow(idx, 'companyName', e.target.value)
-                            }
-                            placeholder="ALPHA TECH SOLUTIONS SDN. BHD."
-                            className="w-full px-3 py-2 text-xs text-slate-900 bg-white border border-slate-300 rounded-lg"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs font-medium text-slate-600 mb-1">
-                            SSM MyCoID / Reg No.
-                          </label>
-                          <input
-                            type="text"
-                            required
-                            value={comp.myCoId}
-                            onChange={(e) =>
-                              updateCompanyRow(idx, 'myCoId', e.target.value)
-                            }
-                            placeholder="202301018899 (1512345-A)"
-                            className="w-full px-3 py-2 text-xs font-mono text-slate-900 bg-white border border-slate-300 rounded-lg"
-                          />
-                        </div>
-                      </div>
-                      <div className="space-y-1.5">
-                        <div className="flex items-center justify-between">
-                          <label className="block text-xs font-medium text-slate-600">
-                            Google Drive Shared Folder Link
-                          </label>
-                          <button
-                            type="button"
-                            onClick={() => handleTestFolder(idx, comp.driveFolderId)}
-                            disabled={testingIdx === idx || !comp.driveFolderId.trim()}
-                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-200 text-slate-800 text-[11px] font-semibold hover:bg-slate-300 disabled:opacity-50 transition-colors cursor-pointer"
-                          >
-                            {testingIdx === idx ? (
-                              <>
-                                <Loader2 className="w-3 h-3 animate-spin" />
-                                <span>Testing...</span>
-                              </>
-                            ) : (
-                              <span>Test Folder Link</span>
-                            )}
-                          </button>
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <div className="flex-1">
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add Company</span>
+                    </button>
+                  </div>
+
+                  <div className="space-y-3">
+                    {companiesInput.map((comp, idx) => (
+                      <div
+                        key={idx}
+                        className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-3 relative"
+                      >
+                        <div className="grid sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-xs font-medium text-slate-600 mb-1">
+                              Company Name
+                            </label>
                             <input
                               type="text"
                               required
-                              value={comp.driveFolderId}
+                              value={comp.companyName}
                               onChange={(e) =>
-                                updateCompanyRow(idx, 'driveFolderId', e.target.value)
+                                updateCompanyRow(idx, 'companyName', e.target.value)
                               }
-                              placeholder="https://drive.google.com/drive/folders/... or Folder ID"
-                              className="w-full px-3 py-2 text-xs font-mono text-slate-900 bg-white border border-slate-300 rounded-lg"
+                              placeholder="ALPHA TECH SOLUTIONS SDN. BHD."
+                              className="w-full px-3 py-2 text-xs text-slate-900 bg-white border border-slate-300 rounded-lg"
                             />
                           </div>
-                          {companiesInput.length > 1 && (
-                            <button
-                              type="button"
-                              onClick={() => removeCompanyRow(idx)}
-                              aria-label="Remove company"
-                              className="self-end p-2 rounded-lg border border-red-200 bg-white text-red-600 hover:bg-red-50 cursor-pointer"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          )}
-                        </div>
-                        <p className="text-[11px] text-slate-500">
-                          In Google Drive, set folder access to &quot;Anyone with the link (Viewer)&quot; and paste the link here.
-                        </p>
-                        {testResult[idx] && (
-                          <div
-                            role="alert"
-                            className={`p-2 rounded text-[11px] ${
-                              testResult[idx]?.ok
-                                ? 'bg-emerald-50 border border-emerald-200 text-emerald-800'
-                                : 'bg-red-50 border border-red-200 text-red-800'
-                            }`}
-                          >
-                            {testResult[idx]?.message}
+                          <div>
+                            <label className="block text-xs font-medium text-slate-600 mb-1">
+                              SSM MyCoID / Reg No.
+                            </label>
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="text"
+                                required
+                                value={comp.myCoId}
+                                onChange={(e) =>
+                                  updateCompanyRow(idx, 'myCoId', e.target.value)
+                                }
+                                placeholder="202301018899"
+                                className="w-full px-3 py-2 text-xs font-mono text-slate-900 bg-white border border-slate-300 rounded-lg"
+                              />
+                              {companiesInput.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => removeCompanyRow(idx)}
+                                  aria-label="Remove company"
+                                  className="p-2 rounded-lg border border-red-200 bg-white text-red-600 hover:bg-red-50 cursor-pointer shrink-0"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              )}
+                            </div>
                           </div>
-                        )}
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
 
-              <div className="pt-4 border-t border-slate-200 flex items-center justify-end gap-3">
+              <div className="pt-4 border-t border-slate-200 flex items-center justify-end gap-3 shrink-0">
                 <button
                   type="button"
                   onClick={() => setModalOpen(false)}
@@ -654,7 +585,7 @@ export function UserManagementPanel({ currentUser }: UserManagementPanelProps) {
                 <button
                   type="submit"
                   disabled={saving}
-                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-[#0F172A] text-white text-xs font-semibold hover:bg-slate-800 disabled:opacity-50 cursor-pointer"
+                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 disabled:opacity-50 cursor-pointer shadow-sm"
                 >
                   {saving ? (
                     <>
@@ -662,7 +593,7 @@ export function UserManagementPanel({ currentUser }: UserManagementPanelProps) {
                       <span>Saving...</span>
                     </>
                   ) : (
-                    <span>Save User &amp; Assign Access</span>
+                    <span>Save User Account</span>
                   )}
                 </button>
               </div>

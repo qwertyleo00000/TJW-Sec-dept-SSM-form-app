@@ -209,22 +209,27 @@ export default function App() {
 
   async function handleUploadFile(file: File) {
     if (!activeCompany) return;
-    const newDoc = await uploadStatutoryPdf(activeCompany.myCoId, file);
-    setDocuments((prev) => [newDoc, ...prev]);
-    showToast(`Successfully uploaded ${newDoc.fileName}`, 'success');
+    const res = (await uploadStatutoryPdf(activeCompany.myCoId, file)) as any;
+    const newDoc = res.document ?? res;
+    const notifiedCount = res.notifiedCount ?? 0;
+    await loadDocuments(activeCompany.myCoId);
+    showToast(
+      `Uploaded ${newDoc.fileName} and notified ${notifiedCount} registered user(s) for ${activeCompany.companyName}.`,
+      'success',
+    );
   }
 
   async function handleRenameFile(fileId: string, newName: string) {
-    await renameStatutoryFile(fileId, newName);
-    if (activeCompany) {
-      await loadDocuments(activeCompany.myCoId);
-    }
+    if (!activeCompany) return;
+    await renameStatutoryFile(activeCompany.myCoId, fileId, newName);
+    await loadDocuments(activeCompany.myCoId);
     showToast('Document renamed successfully', 'success');
   }
 
   async function handleDeleteFile(fileId: string) {
-    await deleteStatutoryFile(fileId);
-    setDocuments((prev) => prev.filter((d) => d.fileId !== fileId));
+    if (!activeCompany) return;
+    await deleteStatutoryFile(activeCompany.myCoId, fileId);
+    await loadDocuments(activeCompany.myCoId);
     showToast('Document deleted successfully', 'success');
   }
 
@@ -284,7 +289,6 @@ export default function App() {
     company: activeCompany ?? {
       myCoId: '000000-X',
       companyName: 'Unassigned Company',
-      driveFolderId: '',
     },
     missingForms: ['General Statutory Form Inquiry'],
     user: session.user,
@@ -484,7 +488,7 @@ export default function App() {
 
       <MissingFormModal
         open={missingModalOpen}
-        company={activeCompany ?? { myCoId: '000000-X', companyName: 'Unassigned Company', driveFolderId: '' }}
+        company={activeCompany ?? { myCoId: '000000-X', companyName: 'Unassigned Company' }}
         user={session.user}
         whatsappNumber={whatsappNumber}
         onClose={() => setMissingModalOpen(false)}

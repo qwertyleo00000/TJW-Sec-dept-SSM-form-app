@@ -23,7 +23,12 @@ import {
   renameFile,
   uploadFileToFolder,
 } from './server/drive.ts';
-import { sendRecoveryEmail } from './server/mailer.ts';
+import {
+  sendRecoveryEmail,
+  sendRegistrationEmails,
+  sendAccountApprovedEmail,
+  sendNewDocumentUploadedEmails,
+} from './server/mailer.ts';
 import { searchCompanyDocumentsWithGemini } from './server/gemini.ts';
 import {
   deleteUser,
@@ -31,7 +36,9 @@ import {
   getAllAccessibleCompanies,
   getAllUsers,
   getAuthorizedCompany,
+  loadRegistry,
   registerUser,
+  saveRegistry,
   upsertUser,
 } from './server/registry.ts';
 import { recordAuditEvent, readAuditLogs } from './server/audit.ts';
@@ -54,7 +61,7 @@ async function startServer() {
   app.use(cookieParser());
 
   // 1. Authentication & Registration APIs
-  app.post('/api/auth/login', (req, res) => {
+  app.post('/api/auth/login', async (req, res) => {
     try {
       const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
       const password = typeof req.body?.password === 'string' ? req.body.password : '';
@@ -104,7 +111,7 @@ async function startServer() {
           status: user.status,
           companies: user.companies,
         },
-        authorizedCompanies: getAllAccessibleCompanies(user),
+        authorizedCompanies: await getAllAccessibleCompanies(user),
         cosecWhatsappNumber: COSEC_WHATSAPP_NUMBER,
         token,
       });
@@ -114,7 +121,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/auth/register', (req, res) => {
+  app.post('/api/auth/register', async (req, res) => {
     try {
       const fullName =
         typeof req.body?.fullName === 'string' ? req.body.fullName.trim() : '';
@@ -161,6 +168,12 @@ async function startServer() {
         companyName,
         myCoId,
       });
+
+      try {
+        await sendRegistrationEmails(newUser, getAllUsers(), companyName, myCoId);
+      } catch (mailErr) {
+        console.error('Failed to send registration emails:', mailErr);
+      }
 
       recordAuditEvent({
         userEmail: email,
@@ -353,7 +366,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/auth/me', requireAuth, (req: AuthenticatedRequest, res) => {
+  app.get('/api/auth/me', requireAuth, async (req: AuthenticatedRequest, res) => {
     const user = req.authUser!;
     res.json({
       user: {
@@ -363,7 +376,7 @@ async function startServer() {
         status: user.status,
         companies: user.companies,
       },
-      authorizedCompanies: getAllAccessibleCompanies(user),
+      authorizedCompanies: await getAllAccessibleCompanies(user),
       cosecWhatsappNumber: COSEC_WHATSAPP_NUMBER,
     });
   });
@@ -406,7 +419,7 @@ async function startServer() {
       try {
         const myCoId = String(req.params.myCoId);
         const user = req.authUser!;
-        const company = getAuthorizedCompany(user, myCoId);
+        const company = await getAuthorizedCompany(user, myCoId);
         if (!company) {
           res.status(403).json({
             error: 'Access denied. You are not authorized to access documents for this company.',
@@ -414,7 +427,7 @@ async function startServer() {
           return;
         }
 
-        const documents = await listDocumentsForFolder(company.driveFolderId);
+        const documents = listDocumentsForFolder(company.myCoId);
         recordAuditEvent({
           userEmail: user.email,
           userName: user.fullName,
@@ -455,7 +468,7 @@ async function startServer() {
         }
 
         const user = req.authUser!;
-        const company = getAuthorizedCompany(user, myCoId);
+        const company = await getAuthorizedCompany(user, myCoId);
         if (!company) {
           res.status(403).json({
             error: 'Access denied. You are not authorized to query this company vault.',
@@ -463,7 +476,7 @@ async function startServer() {
           return;
         }
 
-        const documents = await listDocumentsForFolder(company.driveFolderId);
+        const documents = listDocumentsForFolder(company.myCoId);
         const aiResult = await searchCompanyDocumentsWithGemini(
           company.companyName,
           documents,
@@ -491,7 +504,7 @@ async function startServer() {
         const fileId = String(req.params.fileId);
 
         const user = req.authUser!;
-        const company = getAuthorizedCompany(user, myCoId);
+        const company = await getAuthorizedCompany(user, myCoId);
         if (!company) {
           res.status(403).json({
             error: 'Access denied. You are not authorized to download files for this company.',
@@ -549,11 +562,52 @@ async function startServer() {
     requireAuth,
     requireRole('administrator', 'manager'),
     upload.single('file'),
-    async (_req: AuthenticatedRequest, res) => {
-      res.status(400).json({
-        error:
-          'Managed via linked Google Drive folder. Please add PDFs directly inside your shared Google Drive folder.',
-      });
+    async (req: AuthenticatedRequest, res) => {
+      try {
+        const file = req.file;
+        const myCoId = typeof req.body?.myCoId === 'string' ? req.body.myCoId.trim() : '';
+        const companyName = typeof req.body?.companyName === 'string' ? req.body.companyName.trim() : myCoId;
+
+        if (!file) {
+          res.status(400).json({ error: 'Please select a PDF file to upload.' });
+          return;
+        }
+        if (!myCoId) {
+          res.status(400).json({ error: 'Company registration number (MyCoID) is required.' });
+          return;
+        }
+
+        const document = await uploadFileToFolder(myCoId, file.buffer, file.originalname);
+        const company = { myCoId, companyName };
+        const notifiedCount = await sendNewDocumentUploadedEmails(
+          company,
+          document,
+          getAllUsers(),
+          req.authUser!.email,
+        );
+
+        recordAuditEvent({
+          userEmail: req.authUser!.email,
+          userName: req.authUser!.fullName,
+          userRole: req.authUser!.role,
+          action: 'FILE_UPLOAD',
+          companyName,
+          myCoId,
+          documentName: document.fileName,
+          details: `Uploaded ${document.fileName} and notified ${notifiedCount} user(s).`,
+          ipAddress: req.ip || (req.headers['x-forwarded-for'] as string),
+        });
+
+        res.status(201).json({
+          success: true,
+          document,
+          notifiedCount,
+          message: `Uploaded ${document.fileName} and notified ${notifiedCount} registered user(s) for ${companyName}.`,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'File upload failed.';
+        res.status(500).json({ error: message });
+      }
     },
   );
 
@@ -561,11 +615,33 @@ async function startServer() {
     '/api/admin/files/:fileId',
     requireAuth,
     requireRole('administrator', 'manager'),
-    async (_req: AuthenticatedRequest, res) => {
-      res.status(400).json({
-        error:
-          'Managed via linked Google Drive folder. Please rename PDFs directly inside your shared Google Drive folder.',
-      });
+    async (req: AuthenticatedRequest, res) => {
+      try {
+        const fileId = String(req.params.fileId);
+        const myCoId = typeof req.body?.myCoId === 'string' ? req.body.myCoId.trim() : '';
+        const newFileName = typeof req.body?.newFileName === 'string' ? req.body.newFileName.trim() : '';
+
+        if (!myCoId || !newFileName) {
+          res.status(400).json({ error: 'Company MyCoID and new filename are required.' });
+          return;
+        }
+
+        await renameFile(myCoId, fileId, newFileName);
+        recordAuditEvent({
+          userEmail: req.authUser!.email,
+          userName: req.authUser!.fullName,
+          userRole: req.authUser!.role,
+          action: 'FILE_RENAME',
+          myCoId,
+          documentName: newFileName,
+          ipAddress: req.ip || (req.headers['x-forwarded-for'] as string),
+        });
+
+        res.json({ success: true });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Rename failed.';
+        res.status(400).json({ error: message });
+      }
     },
   );
 
@@ -573,11 +649,37 @@ async function startServer() {
     '/api/admin/files/:fileId',
     requireAuth,
     requireRole('administrator', 'manager'),
-    async (_req: AuthenticatedRequest, res) => {
-      res.status(400).json({
-        error:
-          'Managed via linked Google Drive folder. Please delete PDFs directly inside your shared Google Drive folder.',
-      });
+    async (req: AuthenticatedRequest, res) => {
+      try {
+        const fileId = String(req.params.fileId);
+        const myCoId =
+          typeof req.query.myCoId === 'string'
+            ? req.query.myCoId.trim()
+            : typeof req.body?.myCoId === 'string'
+              ? req.body.myCoId.trim()
+              : '';
+
+        if (!myCoId) {
+          res.status(400).json({ error: 'Company MyCoID is required.' });
+          return;
+        }
+
+        await deleteFile(myCoId, fileId);
+        recordAuditEvent({
+          userEmail: req.authUser!.email,
+          userName: req.authUser!.fullName,
+          userRole: req.authUser!.role,
+          action: 'FILE_DELETE',
+          myCoId,
+          documentName: fileId,
+          ipAddress: req.ip || (req.headers['x-forwarded-for'] as string),
+        });
+
+        res.json({ success: true });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Delete failed.';
+        res.status(400).json({ error: message });
+      }
     },
   );
 
@@ -654,130 +756,80 @@ async function startServer() {
     '/api/admin/users/:email',
     requireAuth,
     requireRole('administrator', 'manager'),
-    (req: AuthenticatedRequest, res) => {
-      const caller = req.authUser!;
-      const targetEmail = decodeURIComponent(req.params.email).trim().toLowerCase();
-      const existing = findUserByEmail(targetEmail);
-
-      if (!existing) {
-        res.status(404).json({ error: 'User not found in registry.' });
-        return;
-      }
-
-      if (caller.role === 'manager' && existing.role !== 'user') {
-        res.status(403).json({ error: 'Managers cannot modify administrator or manager accounts.' });
-        return;
-      }
-
-      const fullName =
-        typeof req.body?.fullName === 'string'
-          ? req.body.fullName.trim()
-          : existing.fullName;
-      const role =
-        typeof req.body?.role === 'string' ? req.body.role.trim() : existing.role;
-      const status =
-        typeof req.body?.status === 'string' ? req.body.status.trim() : existing.status;
-      const companies = Array.isArray(req.body?.companies)
-        ? req.body.companies
-        : existing.companies;
-      const newPassword = typeof req.body?.password === 'string' ? req.body.password : '';
-
-      if (caller.role === 'manager' && role !== 'user') {
-        res.status(403).json({ error: 'Managers cannot assign manager or administrator roles.' });
-        return;
-      }
-
-      let passwordHash = existing.passwordHash;
-      if (newPassword) {
-        const strength = validatePasswordStrength(newPassword);
-        if (!strength.valid) {
-          res.status(400).json({ error: strength.message });
-          return;
-        }
-        passwordHash = hashPassword(newPassword);
-      }
-
-      const updated = upsertUser({
-        email: targetEmail,
-        fullName,
-        role: role as any,
-        status: status as any,
-        passwordHash,
-        companies,
-        requestedCompany: existing.requestedCompany,
-      });
-
-      recordAuditEvent({
-        userEmail: caller.email,
-        userName: caller.fullName,
-        userRole: caller.role,
-        action: 'USER_UPDATED',
-        details: `Updated user account: ${targetEmail} (Role: ${role}, Status: ${status})`,
-        ipAddress: req.ip || (req.headers['x-forwarded-for'] as string),
-      });
-
-      res.json({ user: updated });
-    },
-  );
-
-  app.delete(
-    '/api/admin/users/:email',
-    requireAuth,
-    requireRole('administrator', 'manager'),
-    (req: AuthenticatedRequest, res) => {
-      const caller = req.authUser!;
-      const targetEmail = decodeURIComponent(req.params.email).trim().toLowerCase();
-      const existing = findUserByEmail(targetEmail);
-
-      if (!existing) {
-        res.status(404).json({ error: 'User not found.' });
-        return;
-      }
-
-      if (caller.role === 'manager' && existing.role !== 'user') {
-        res.status(403).json({ error: 'Managers can only delete standard user accounts.' });
-        return;
-      }
-
-      if (caller.email.toLowerCase() === targetEmail) {
-        res.status(400).json({ error: 'You cannot delete your own account.' });
-        return;
-      }
-
-      const success = deleteUser(targetEmail);
-      if (!success) {
-        res.status(404).json({ error: 'User could not be deleted.' });
-        return;
-      }
-
-      recordAuditEvent({
-        userEmail: caller.email,
-        userName: caller.fullName,
-        userRole: caller.role,
-        action: 'USER_DELETED',
-        details: `Deleted user account: ${targetEmail}`,
-        ipAddress: req.ip || (req.headers['x-forwarded-for'] as string),
-      });
-
-      res.json({ success: true });
-    },
-  );
-
-  app.post(
-    '/api/admin/drive/verify-folder',
-    requireAuth,
-    requireRole('administrator', 'manager'),
     async (req: AuthenticatedRequest, res) => {
       try {
-        const driveFolderId = typeof req.body?.driveFolderId === 'string' ? req.body.driveFolderId.trim() : '';
-        if (!driveFolderId) {
-          res.status(400).json({ error: 'Google Drive folder link or ID is required.' });
+        const caller = req.authUser!;
+        const targetEmail = decodeURIComponent(req.params.email).trim().toLowerCase();
+        const existing = findUserByEmail(targetEmail);
+
+        if (!existing) {
+          res.status(404).json({ error: 'User not found in registry.' });
           return;
         }
-        const documents = await listDocumentsForFolder(driveFolderId);
-        res.json({ ok: true, count: documents.length, documents });
+
+        if (caller.role === 'manager' && existing.role !== 'user') {
+          res.status(403).json({ error: 'Managers cannot modify administrator or manager accounts.' });
+          return;
+        }
+
+        const fullName =
+          typeof req.body?.fullName === 'string'
+            ? req.body.fullName.trim()
+            : existing.fullName;
+        const role =
+          typeof req.body?.role === 'string' ? req.body.role.trim() : existing.role;
+        const status =
+          typeof req.body?.status === 'string' ? req.body.status.trim() : existing.status;
+        const companies = Array.isArray(req.body?.companies)
+          ? req.body.companies
+          : existing.companies;
+        const newPassword = typeof req.body?.password === 'string' ? req.body.password : '';
+
+        if (caller.role === 'manager' && role !== 'user') {
+          res.status(403).json({ error: 'Managers cannot assign manager or administrator roles.' });
+          return;
+        }
+
+        let passwordHash = existing.passwordHash;
+        if (newPassword) {
+          const strength = validatePasswordStrength(newPassword);
+          if (!strength.valid) {
+            res.status(400).json({ error: strength.message });
+            return;
+          }
+          passwordHash = hashPassword(newPassword);
+        }
+
+        const updated = upsertUser({
+          email: targetEmail,
+          fullName,
+          role: role as any,
+          status: status as any,
+          passwordHash,
+          companies,
+          requestedCompany: existing.requestedCompany,
+        });
+
+        if (existing.status === 'pending' && updated.status === 'active') {
+          try {
+            await sendAccountApprovedEmail(updated);
+          } catch (mailErr) {
+            console.error('Failed to send account approval email:', mailErr);
+          }
+        }
+
+        recordAuditEvent({
+          userEmail: caller.email,
+          userName: caller.fullName,
+          userRole: caller.role,
+          action: 'USER_UPDATED',
+          details: `Updated user account: ${targetEmail} (Role: ${role}, Status: ${status})`,
+          ipAddress: req.ip || (req.headers['x-forwarded-for'] as string),
+        });
+
+        res.json({ user: updated });
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Failed to verify Google Drive folder.';
+        const message = err instanceof Error ? err.message : 'Failed to update user.';
         res.status(400).json({ error: message });
       }
     },
@@ -787,10 +839,10 @@ async function startServer() {
   app.post(
     '/api/companies/:myCoId/missing-request',
     requireAuth,
-    (req: AuthenticatedRequest, res) => {
+    async (req: AuthenticatedRequest, res) => {
       const myCoId = String(req.params.myCoId);
       const user = req.authUser!;
-      const company = getAuthorizedCompany(user, myCoId);
+      const company = await getAuthorizedCompany(user, myCoId);
       if (!company) {
         res.status(403).json({ error: 'Access denied for this company.' });
         return;
@@ -834,12 +886,12 @@ async function startServer() {
   );
 
   // 5. Activity & Audit Trail APIs
-  app.post('/api/audit/ctc-click', requireAuth, (req: AuthenticatedRequest, res) => {
+  app.post('/api/audit/ctc-click', requireAuth, async (req: AuthenticatedRequest, res) => {
     const user = req.authUser!;
     const myCoId = typeof req.body?.myCoId === 'string' ? req.body.myCoId.trim() : '';
     const documentName = typeof req.body?.documentName === 'string' ? req.body.documentName.trim() : '';
     const companyName = typeof req.body?.companyName === 'string' ? req.body.companyName.trim() : undefined;
-    const company = getAuthorizedCompany(user, myCoId);
+    const company = await getAuthorizedCompany(user, myCoId);
 
     recordAuditEvent({
       userEmail: user.email,

@@ -181,15 +181,12 @@ export function DocumentTable({
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={onRetry}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 bg-white text-xs sm:text-sm font-semibold text-slate-800 hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                onClick={() => setUploadModalOpen(true)}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-900 text-white text-xs sm:text-sm font-semibold hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer shadow-sm"
               >
-                <RefreshCw className="w-4 h-4 text-slate-600" />
-                <span>Refresh from Google Drive</span>
+                <FilePlus className="w-4 h-4" />
+                <span>Upload Statutory Form (PDF)</span>
               </button>
-              <span className="hidden xl:inline text-[11px] text-slate-500 italic">
-                Managed via linked Google Drive folder
-              </span>
             </div>
           )}
 
@@ -592,7 +589,7 @@ export function DocumentTable({
               Confirm Document Deletion
             </h3>
             <p className="text-sm text-slate-600 leading-relaxed">
-              Are you sure you want to delete <span className="font-semibold text-slate-900">{deleteConfirmDoc.fileName}</span>? This will move the file to trash in Google Drive.
+              Are you sure you want to delete <span className="font-semibold text-slate-900">{deleteConfirmDoc.fileName}</span>? This will remove the document from the company vault.
             </p>
 
             <div className="flex items-center justify-end gap-3 pt-2">

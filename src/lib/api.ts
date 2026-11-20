@@ -245,6 +245,7 @@ export async function uploadStatutoryPdf(
 }
 
 export async function renameStatutoryFile(
+  myCoId: string,
   fileId: string,
   newFileName: string,
 ): Promise<void> {
@@ -254,15 +255,18 @@ export async function renameStatutoryFile(
       method: 'PATCH',
       headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
       credentials: 'include',
-      body: JSON.stringify({ newFileName }),
+      body: JSON.stringify({ myCoId, newFileName }),
     },
   );
   await parseJsonResponse(res);
 }
 
-export async function deleteStatutoryFile(fileId: string): Promise<void> {
+export async function deleteStatutoryFile(
+  myCoId: string,
+  fileId: string,
+): Promise<void> {
   const res = await fetch(
-    `/api/admin/files/${encodeURIComponent(fileId)}`,
+    `/api/admin/files/${encodeURIComponent(fileId)}?myCoId=${encodeURIComponent(myCoId)}`,
     {
       method: 'DELETE',
       headers: buildAuthHeaders(),
@@ -417,16 +421,6 @@ export function getAuditCsvDownloadUrl(filters?: {
   return `/api/audit/export.csv${query}`;
 }
 
-export async function verifyDriveFolder(
-  driveFolderId: string,
-): Promise<{ ok: boolean; count: number; documents: StatutoryDocument[] }> {
-  const res = await fetch('/api/admin/drive/verify-folder', {
-    method: 'POST',
-    headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
-    credentials: 'include',
-    body: JSON.stringify({ driveFolderId }),
-  });
-  return parseJsonResponse(res);
-}
+
 
 

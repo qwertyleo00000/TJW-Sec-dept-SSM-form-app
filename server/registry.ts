@@ -46,8 +46,16 @@ export function loadRegistry(): RegistryFile {
     data.users = data.users.map((u) => ({
       ...u,
       status: u.status === 'pending' ? 'pending' : 'active',
-      passwordHash: u.passwordHash && u.passwordHash.includes(':') ? u.passwordHash : defaultPasswordHash,
-      companies: Array.isArray(u.companies) ? u.companies : [],
+      passwordHash:
+        u.passwordHash && u.passwordHash.includes(':')
+          ? u.passwordHash
+          : defaultPasswordHash,
+      companies: Array.isArray(u.companies)
+        ? u.companies.map((c) => ({
+            myCoId: c.myCoId?.trim() || '',
+            companyName: c.companyName?.trim() || c.myCoId?.trim() || 'Company',
+          }))
+        : [],
     }));
     return data;
   } catch {
@@ -153,16 +161,24 @@ export function registerUser(userData: {
     throw new Error('An account with this email address already exists.');
   }
 
+  const cleanMyCoId = userData.myCoId.trim();
+  const cleanCompanyName = userData.companyName.trim();
+
   const newUser: RegistryUser = {
     email: normalizedEmail,
     fullName: userData.fullName.trim(),
     role: 'user',
     status: 'pending',
     passwordHash: userData.passwordHash,
-    companies: [],
+    companies: [
+      {
+        myCoId: cleanMyCoId,
+        companyName: cleanCompanyName,
+      },
+    ],
     requestedCompany: {
-      companyName: userData.companyName.trim(),
-      myCoId: userData.myCoId.trim(),
+      companyName: cleanCompanyName,
+      myCoId: cleanMyCoId,
     },
   };
 
@@ -189,20 +205,26 @@ export function upsertUser(userData: {
   const existing = existingIdx >= 0 ? registry.users[existingIdx] : null;
   const defaultPasswordHash = hashPassword('Mycorporate50');
 
+  const role = userData.role;
+  // Administrators and managers have empty companies array since they access all companies
+  const companies =
+    role === 'administrator' || role === 'manager'
+      ? []
+      : Array.isArray(userData.companies)
+        ? userData.companies.map((c) => ({
+            myCoId: c.myCoId.trim(),
+            companyName: c.companyName.trim() || c.myCoId.trim(),
+          }))
+        : existing?.companies ?? [];
+
   const cleaned: RegistryUser = {
     email: normalizedEmail,
     fullName: userData.fullName.trim() || 'Valued User',
-    role: userData.role,
+    role,
     status: userData.status ?? existing?.status ?? 'active',
     passwordHash:
       userData.passwordHash ?? existing?.passwordHash ?? defaultPasswordHash,
-    companies: Array.isArray(userData.companies)
-      ? userData.companies.map((c) => ({
-          myCoId: c.myCoId.trim(),
-          companyName: c.companyName.trim(),
-          driveFolderId: c.driveFolderId.trim(),
-        }))
-      : existing?.companies ?? [],
+    companies,
     requestedCompany:
       userData.requestedCompany !== undefined
         ? userData.requestedCompany
@@ -233,39 +255,83 @@ export function deleteUser(email: string): boolean {
   return false;
 }
 
-export function getAuthorizedCompany(
+export async function getAuthorizedCompany(
   user: RegistryUser,
   myCoId: string,
-): CompanyAssignment | null {
-  if (user.role === 'administrator' || user.role === 'manager') {
-    const registry = loadRegistry();
-    for (const u of registry.users) {
-      const found = u.companies.find((c) => c.myCoId === myCoId);
-      if (found) return found;
-    }
-  }
-  return user.companies.find((c) => c.myCoId === myCoId) ?? null;
+): Promise<CompanyAssignment | null> {
+  const accessible = await getAllAccessibleCompanies(user);
+  return accessible.find((c) => c.myCoId === myCoId) ?? null;
 }
 
-export function getAllAccessibleCompanies(
+export async function getAllAccessibleCompanies(
   user: RegistryUser,
-): CompanyAssignment[] {
-  if (user.role === 'administrator' || user.role === 'manager') {
-    const registry = loadRegistry();
-    const map = new Map<string, CompanyAssignment>();
-    for (const u of registry.users) {
+): Promise<CompanyAssignment[]> {
+  const registry = loadRegistry();
+  const map = new Map<string, CompanyAssignment>();
+
+  // Collect companies from all registered users
+  for (const u of registry.users) {
+    if (Array.isArray(u.companies)) {
       for (const c of u.companies) {
         if (c.myCoId) {
-          map.set(c.myCoId, c);
+          map.set(c.myCoId, {
+            myCoId: c.myCoId,
+            companyName: c.companyName || c.myCoId,
+          });
         }
       }
     }
-    for (const c of user.companies) {
-      if (c.myCoId) {
-        map.set(c.myCoId, c);
+    if (u.requestedCompany?.myCoId) {
+      const rId = u.requestedCompany.myCoId;
+      if (!map.has(rId)) {
+        map.set(rId, {
+          myCoId: rId,
+          companyName: u.requestedCompany.companyName || rId,
+        });
       }
     }
-    return Array.from(map.values());
   }
-  return user.companies;
+
+  // Also scan data/uploads directory for any local folders
+  try {
+    const uploadsDir = path.resolve(process.cwd(), 'data', 'uploads');
+    if (fs.existsSync(uploadsDir)) {
+      const subdirs = fs.readdirSync(uploadsDir, { withFileTypes: true });
+      for (const sub of subdirs) {
+        if (sub.isDirectory()) {
+          const myCoId = sub.name;
+          if (!map.has(myCoId)) {
+            map.set(myCoId, {
+              myCoId,
+              companyName: myCoId.replace(/_/g, ' '),
+            });
+          }
+        }
+      }
+    }
+  } catch {}
+
+  if (user.role === 'administrator' || user.role === 'manager') {
+    return Array.from(map.values()).sort((a, b) =>
+      a.companyName.localeCompare(b.companyName, undefined, {
+        sensitivity: 'base',
+      }),
+    );
+  }
+
+  // Regular client user: only return companies assigned to them
+  const userCompanies: CompanyAssignment[] = [];
+  if (Array.isArray(user.companies)) {
+    for (const c of user.companies) {
+      if (c.myCoId && map.has(c.myCoId)) {
+        userCompanies.push(map.get(c.myCoId)!);
+      } else if (c.myCoId) {
+        userCompanies.push({
+          myCoId: c.myCoId,
+          companyName: c.companyName || c.myCoId,
+        });
+      }
+    }
+  }
+  return userCompanies;
 }
