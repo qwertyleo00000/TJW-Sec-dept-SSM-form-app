@@ -23,9 +23,10 @@ import { VaultEmblem } from './BrandMark';
 
 interface LoginScreenProps {
   onAuthenticated: (session: AuthSessionResponse) => void;
+  idleLogoutNotice?: string;
 }
 
-export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
+export function LoginScreen({ onAuthenticated, idleLogoutNotice }: LoginScreenProps) {
   const [mode, setMode] = useState<
     'signin' | 'register' | 'forgot' | 'reset'
   >('signin');
@@ -247,6 +248,15 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
                     Enter your registered corporate email address and password.
                   </p>
                 </div>
+
+                {idleLogoutNotice && (
+                  <div
+                    role="alert"
+                    className="mt-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 font-medium"
+                  >
+                    {idleLogoutNotice}
+                  </div>
+                )}
 
                 {error && (
                   <div

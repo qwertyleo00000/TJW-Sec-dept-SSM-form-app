@@ -147,12 +147,15 @@ export async function fetchCurrentSession(): Promise<AuthSessionResponse | null>
   return parseJsonResponse<AuthSessionResponse>(res);
 }
 
-export async function logoutSession(): Promise<void> {
+export async function logoutSession(
+  reason: 'manual' | 'inactivity' = 'manual',
+): Promise<void> {
   try {
     await fetch('/api/auth/logout', {
       method: 'POST',
-      headers: buildAuthHeaders(),
+      headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
       credentials: 'include',
+      body: JSON.stringify({ reason }),
     });
   } finally {
     setStoredToken(null);

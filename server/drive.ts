@@ -3,50 +3,85 @@ import path from 'path';
 import { Readable } from 'stream';
 import type { DocumentCategory, StatutoryDocument, CompanyAssignment } from '../src/types.ts';
 
+export function normalizeMyCoId(myCoId: string): string {
+  if (!myCoId) return 'GENERAL';
+  return myCoId.toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
 export function classifyStatutoryFile(fileName: string): {
   statutorySection: string;
   category: DocumentCategory;
 } {
   const lower = fileName.toLowerCase();
 
-  if (/sec(tion)?[_\s-]*14|superform/.test(lower)) {
-    return { statutorySection: 'Section 14', category: 'Incorporation' };
+  if (
+    /\b(f9|form\s*9|s14|sec\s*14|section\s*14|s15|s17|incorporation|superform|certificate\s*of\s*incorporation)\b/i.test(
+      lower,
+    )
+  ) {
+    return { statutorySection: 'Section 14 / Form 9', category: 'Incorporation' };
   }
-  if (/sec(tion)?[_\s-]*17|cert.*incorp|incorporation/.test(lower)) {
-    return { statutorySection: 'Section 17', category: 'Incorporation' };
+  if (
+    /\b(f49|form\s*49|s58|sec\s*58|section\s*58|f48a|s201|director|secretary|officer|register\s*of\s*directors)\b/i.test(
+      lower,
+    )
+  ) {
+    return {
+      statutorySection: 'Section 58 / Form 49',
+      category: 'Directors & Officers',
+    };
   }
-  if (/sec(tion)?[_\s-]*58|director|officer|secretary/.test(lower)) {
-    return { statutorySection: 'Section 58', category: 'Directors & Officers' };
+  if (
+    /\b(f24|form\s*24|f32a|form\s*32a|s78|sec\s*78|section\s*78|s105|allotment|share|transfer|capital|register\s*of\s*members)\b/i.test(
+      lower,
+    )
+  ) {
+    return { statutorySection: 'Section 78 / Form 24', category: 'Share Capital' };
   }
-  if (/sec(tion)?[_\s-]*78|allotment/.test(lower)) {
-    return { statutorySection: 'Section 78', category: 'Share Capital' };
+  if (
+    /\b(ar|annual\s*return|s68|sec\s*68|section\s*68|s258|financial\s*statement|audited|agm|f55)\b/i.test(
+      lower,
+    )
+  ) {
+    return {
+      statutorySection: 'Section 68 / Annual Return',
+      category: 'Annual Compliance',
+    };
   }
-  if (/sec(tion)?[_\s-]*51|member|shareholder/.test(lower)) {
-    return { statutorySection: 'Section 51', category: 'Share Capital' };
+  if (
+    /\b(m&a|memorandum|articles|constitution|s31|s32|s35|s36|f11|form\s*11|special\s*resolution)\b/i.test(
+      lower,
+    )
+  ) {
+    return { statutorySection: 'Section 32 / Constitution', category: 'Constitution' };
   }
-  if (/sec(tion)?[_\s-]*68|annual[_\s-]*return/.test(lower)) {
-    return { statutorySection: 'Section 68', category: 'Annual Compliance' };
-  }
-  if (/sec(tion)?[_\s-]*46|registered[_\s-]*address/.test(lower)) {
-    return { statutorySection: 'Section 46', category: 'Annual Compliance' };
-  }
-  if (/sec(tion)?[_\s-]*32|constitution|m&a|memorandum/.test(lower)) {
-    return { statutorySection: 'Section 32', category: 'Constitution' };
-  }
-  if (/resolution|minutes|board/.test(lower)) {
-    return { statutorySection: 'Board Resolution', category: 'Directors & Officers' };
-  }
-  return { statutorySection: 'Statutory Filing', category: 'Other' };
+  return { statutorySection: 'General Statutory Filing', category: 'Incorporation' };
 }
 
 function getCompanyUploadDir(myCoId: string): string {
-  const safeMyCoId = (myCoId || 'GENERAL').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const safeMyCoId = normalizeMyCoId(myCoId);
   const dir = path.resolve(process.cwd(), 'data', 'uploads', safeMyCoId);
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
 
+export function cleanupUploadsDir(): void {
+  try {
+    const uploadsRoot = path.resolve(process.cwd(), 'data', 'uploads');
+    if (!fs.existsSync(uploadsRoot)) return;
+    const entries = fs.readdirSync(uploadsRoot, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isFile()) {
+        try {
+          fs.unlinkSync(path.join(uploadsRoot, entry.name));
+        } catch {}
+      }
+    }
+  } catch {}
+}
+
 export function listFilesInFolder(myCoId: string): StatutoryDocument[] {
+  cleanupUploadsDir();
   const dir = getCompanyUploadDir(myCoId);
   if (!fs.existsSync(dir)) return [];
 
@@ -71,7 +106,9 @@ export function listFilesInFolder(myCoId: string): StatutoryDocument[] {
         fileName,
         statutorySection,
         category,
-        lastUpdated: stats.mtime ? stats.mtime.toISOString() : new Date().toISOString(),
+        lastUpdated: stats.mtime
+          ? stats.mtime.toISOString()
+          : new Date().toISOString(),
         fileSizeKB: Math.max(1, Math.round((stats.size || 250000) / 1024)),
       });
     }
@@ -108,7 +145,9 @@ export async function uploadFileToFolder(
     fileName: safeFileName,
     statutorySection,
     category,
-    lastUpdated: stats.mtime ? stats.mtime.toISOString() : new Date().toISOString(),
+    lastUpdated: stats.mtime
+      ? stats.mtime.toISOString()
+      : new Date().toISOString(),
     fileSizeKB: Math.max(1, Math.round(stats.size / 1024)),
   };
 }
@@ -129,7 +168,9 @@ export async function getDownloadableFile(
 
   if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
     const entries = fs.readdirSync(dir);
-    const found = entries.find((e) => Buffer.from(e).toString('base64url') === fileId || e === fileId);
+    const found = entries.find(
+      (e) => Buffer.from(e).toString('base64url') === fileId || e === fileId,
+    );
     if (!found) return null;
     const matchPath = path.join(dir, found);
     const stream = fs.createReadStream(matchPath);
@@ -162,7 +203,10 @@ export async function renameFile(
   }
 }
 
-export async function deleteFile(myCoId: string, fileId: string): Promise<void> {
+export async function deleteFile(
+  myCoId: string,
+  fileId: string,
+): Promise<void> {
   const dir = getCompanyUploadDir(myCoId);
   let fileName = '';
   try {

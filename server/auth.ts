@@ -3,10 +3,21 @@ import type { NextFunction, Request, Response } from 'express';
 import type { UserRole } from '../src/types.ts';
 import { findUserByEmail } from './registry.ts';
 import type { RegistryUser } from './registry.ts';
+import { recordAuditEvent } from './audit.ts';
 
 export const SESSION_COOKIE_NAME = 'cosec_vault_session';
 
 const SESSION_TTL_MS = 1000 * 60 * 60 * 12; // 12 hours
+export const IDLE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes inactivity timeout
+
+interface ActiveSession {
+  token: string;
+  email: string;
+  lastActivityAt: number;
+  exp: number;
+}
+
+const activeSessions = new Map<string, ActiveSession>();
 
 const rawSecret = process.env.SESSION_SECRET?.trim();
 const SESSION_SECRET =
@@ -84,9 +95,11 @@ interface SessionPayload {
 }
 
 export function createSessionToken(email: string): string {
+  const cleanEmail = email.trim().toLowerCase();
+  const exp = Date.now() + SESSION_TTL_MS;
   const payload: SessionPayload = {
-    email: email.trim().toLowerCase(),
-    exp: Date.now() + SESSION_TTL_MS,
+    email: cleanEmail,
+    exp,
   };
   const encodedPayload = Buffer.from(JSON.stringify(payload)).toString(
     'base64url',
@@ -96,7 +109,14 @@ export function createSessionToken(email: string): string {
     .update(encodedPayload)
     .digest('base64url');
 
-  return `${encodedPayload}.${signature}`;
+  const token = `${encodedPayload}.${signature}`;
+  activeSessions.set(token, {
+    token,
+    email: cleanEmail,
+    lastActivityAt: Date.now(),
+    exp,
+  });
+  return token;
 }
 
 export function verifySessionToken(token: string): SessionPayload | null {
@@ -129,12 +149,32 @@ export function verifySessionToken(token: string): SessionPayload | null {
   }
 }
 
+export function removeActiveSession(
+  token: string,
+  reason: 'manual' | 'inactivity' = 'manual',
+  ip?: string,
+): void {
+  const session = activeSessions.get(token);
+  if (session) {
+    activeSessions.delete(token);
+    const user = findUserByEmail(session.email);
+    if (user) {
+      recordAuditEvent({
+        userEmail: user.email,
+        userName: user.fullName,
+        userRole: user.role,
+        action: reason === 'inactivity' ? 'AUTO_LOGOUT_INACTIVITY' : 'LOGOUT',
+        ipAddress: ip,
+      });
+    }
+  }
+}
+
 export function setSessionCookie(
   req: Request,
   res: Response,
   token: string,
 ): void {
-  // Always use sameSite: 'none' and secure: true for cross-origin HTTPS iframe in AI Studio
   res.cookie(SESSION_COOKIE_NAME, token, {
     httpOnly: true,
     secure: true,
@@ -177,19 +217,55 @@ export function requireAuth(
     return;
   }
 
+  const session = activeSessions.get(token);
+  const now = Date.now();
+
+  if (
+    !session ||
+    now - session.lastActivityAt > IDLE_TIMEOUT_MS ||
+    now > session.exp
+  ) {
+    if (session) {
+      activeSessions.delete(token);
+      const user = findUserByEmail(session.email);
+      if (user) {
+        recordAuditEvent({
+          userEmail: user.email,
+          userName: user.fullName,
+          userRole: user.role,
+          action: 'AUTO_LOGOUT_INACTIVITY',
+          details: 'Session expired after 10 minutes of inactivity.',
+          ipAddress: req.ip || (req.headers['x-forwarded-for'] as string),
+        });
+      }
+    }
+    clearSessionCookie(req, res);
+    res.status(401).json({
+      error: 'Session expired after 10 minutes of inactivity. Please sign in again.',
+    });
+    return;
+  }
+
+  // Sliding window update
+  session.lastActivityAt = now;
+
   const payload = verifySessionToken(token);
   if (!payload) {
-    res
-      .status(401)
-      .json({ error: 'Session expired or invalid. Please sign in again.' });
+    activeSessions.delete(token);
+    clearSessionCookie(req, res);
+    res.status(401).json({
+      error: 'Session expired or invalid. Please sign in again.',
+    });
     return;
   }
 
   const user = findUserByEmail(payload.email);
   if (!user) {
-    res
-      .status(403)
-      .json({ error: 'Account is no longer active in the Client Access Registry.' });
+    activeSessions.delete(token);
+    clearSessionCookie(req, res);
+    res.status(403).json({
+      error: 'Account is no longer active in the Client Access Registry.',
+    });
     return;
   }
 

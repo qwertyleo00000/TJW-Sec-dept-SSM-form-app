@@ -9,6 +9,7 @@ import {
   clearSessionCookie,
   createSessionToken,
   hashPassword,
+  removeActiveSession,
   requireAuth,
   requireRole,
   setSessionCookie,
@@ -384,27 +385,17 @@ async function startServer() {
   app.post('/api/auth/logout', (req, res) => {
     try {
       const token =
+        req.cookies?.cosec_vault_session ||
         req.cookies?.cosec_vault_auth_token ||
         req.headers.authorization?.replace(/^Bearer\s+/i, '');
+      const reason =
+        typeof req.body?.reason === 'string' ? req.body.reason : 'manual';
       if (token) {
-        const parts = token.split('.');
-        if (parts.length === 2) {
-          const payload = JSON.parse(
-            Buffer.from(parts[0], 'base64').toString('utf-8')
-          );
-          if (payload.email) {
-            const user = findUserByEmail(payload.email);
-            if (user) {
-              recordAuditEvent({
-                userEmail: user.email,
-                userName: user.fullName,
-                userRole: user.role,
-                action: 'LOGOUT',
-                ipAddress: req.ip || (req.headers['x-forwarded-for'] as string),
-              });
-            }
-          }
-        }
+        removeActiveSession(
+          token,
+          reason as any,
+          req.ip || (req.headers['x-forwarded-for'] as string),
+        );
       }
     } catch {}
     clearSessionCookie(req, res);

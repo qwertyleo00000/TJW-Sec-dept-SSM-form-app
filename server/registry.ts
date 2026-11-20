@@ -8,6 +8,7 @@ import type {
   UserStatus,
 } from '../src/types.ts';
 import { hashPassword } from './auth.ts';
+import { normalizeMyCoId } from './drive.ts';
 
 export interface RegistryUser extends AuthenticatedUser {
   email: string;
@@ -260,7 +261,8 @@ export async function getAuthorizedCompany(
   myCoId: string,
 ): Promise<CompanyAssignment | null> {
   const accessible = await getAllAccessibleCompanies(user);
-  return accessible.find((c) => c.myCoId === myCoId) ?? null;
+  const norm = normalizeMyCoId(myCoId);
+  return accessible.find((c) => normalizeMyCoId(c.myCoId) === norm) ?? null;
 }
 
 export async function getAllAccessibleCompanies(

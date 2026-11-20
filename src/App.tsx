@@ -38,6 +38,94 @@ export default function App() {
   const [initializing, setInitializing] = useState(true);
   const [activeMyCoId, setActiveMyCoId] = useState<string>('');
   const [currentTab, setCurrentTab] = useState<'vault' | 'users' | 'audit'>('vault');
+  const [idleLogoutNotice, setIdleLogoutNotice] = useState<string | undefined>(undefined);
+  const [showIdleWarning, setShowIdleWarning] = useState(false);
+  const [idleSecondsRemaining, setIdleSecondsRemaining] = useState(60);
+  const lastActivityRef = useRef<number>(Date.now());
+
+  useEffect(() => {
+    if (!session) return;
+
+    lastActivityRef.current = Date.now();
+    try {
+      localStorage.setItem('cosec_vault_last_activity', String(lastActivityRef.current));
+    } catch {}
+
+    const handleUserActivity = () => {
+      const now = Date.now();
+      lastActivityRef.current = now;
+      try {
+        localStorage.setItem('cosec_vault_last_activity', String(now));
+      } catch {}
+      if (showIdleWarning) {
+        setShowIdleWarning(false);
+      }
+    };
+
+    const handleStorageEvent = (e: StorageEvent) => {
+      if (e.key === 'cosec_vault_last_activity' && e.newValue) {
+        const val = Number(e.newValue);
+        if (!isNaN(val) && val > lastActivityRef.current) {
+          lastActivityRef.current = val;
+          if (showIdleWarning) {
+            setShowIdleWarning(false);
+          }
+        }
+      }
+    };
+
+    const events = ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart', 'click'];
+    for (const ev of events) {
+      window.addEventListener(ev, handleUserActivity, { passive: true });
+    }
+    window.addEventListener('storage', handleStorageEvent);
+
+    const interval = window.setInterval(async () => {
+      const idleMs = Date.now() - lastActivityRef.current;
+      const IDLE_LIMIT_MS = 10 * 60 * 1000; // 10 minutes
+      const WARNING_THRESHOLD_MS = 9 * 60 * 1000; // 9 minutes (60s warning)
+
+      if (idleMs >= IDLE_LIMIT_MS) {
+        try {
+          await logoutSession('inactivity');
+        } catch {}
+        setSession(null);
+        setIdleLogoutNotice('You were automatically logged out after 10 minutes of inactivity for security.');
+        setShowIdleWarning(false);
+        return;
+      }
+
+      if (idleMs >= WARNING_THRESHOLD_MS) {
+        setShowIdleWarning(true);
+        const remaining = Math.max(0, Math.ceil((IDLE_LIMIT_MS - idleMs) / 1000));
+        setIdleSecondsRemaining(remaining);
+      } else {
+        if (showIdleWarning) {
+          setShowIdleWarning(false);
+        }
+      }
+    }, 1000);
+
+    return () => {
+      for (const ev of events) {
+        window.removeEventListener(ev, handleUserActivity);
+      }
+      window.removeEventListener('storage', handleStorageEvent);
+      window.clearInterval(interval);
+    };
+  }, [session, showIdleWarning]);
+
+  const handleStaySignedIn = async () => {
+    const now = Date.now();
+    lastActivityRef.current = now;
+    try {
+      localStorage.setItem('cosec_vault_last_activity', String(now));
+    } catch {}
+    setShowIdleWarning(false);
+    try {
+      await fetchCurrentSession();
+    } catch {}
+  };
 
   const [documents, setDocuments] = useState<StatutoryDocument[]>([]);
   const [docsLoading, setDocsLoading] = useState(false);
@@ -273,7 +361,7 @@ export default function App() {
   if (!session) {
     return (
       <>
-        <LoginScreen onAuthenticated={handleAuthenticated} />
+        <LoginScreen onAuthenticated={handleAuthenticated} idleLogoutNotice={idleLogoutNotice} />
         <Toast toast={toast} onDismiss={() => setToast(null)} />
       </>
     );
@@ -296,6 +384,20 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col">
+      {showIdleWarning && (
+        <div role="alert" className="bg-amber-600 text-white px-4 py-3 shadow-md flex flex-col sm:flex-row items-center justify-between gap-3 z-50 sticky top-0">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <span>⚠️ Your session will expire in <strong className="font-mono">{idleSecondsRemaining}s</strong> due to inactivity.</span>
+          </div>
+          <button
+            type="button"
+            onClick={handleStaySignedIn}
+            className="px-4 py-1.5 rounded-lg bg-white text-amber-900 text-xs font-bold hover:bg-amber-50 transition-colors cursor-pointer shadow-xs"
+          >
+            Stay Signed In
+          </button>
+        </div>
+      )}
       <TopNav
         user={session.user}
         companies={session.authorizedCompanies}
