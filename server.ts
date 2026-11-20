@@ -8,11 +8,12 @@ import type { MissingFormSubmission } from './src/types.ts';
 import {
   clearSessionCookie,
   createSessionToken,
-  issueOtpForEmail,
+  hashPassword,
   requireAuth,
   requireRole,
   setSessionCookie,
-  verifyOtpForEmail,
+  validatePasswordStrength,
+  verifyPassword,
 } from './server/auth.ts';
 import type { AuthenticatedRequest } from './server/auth.ts';
 import {
@@ -22,6 +23,7 @@ import {
   renameFile,
   uploadFileToFolder,
 } from './server/drive.ts';
+import { sendRecoveryEmail } from './server/mailer.ts';
 import { searchCompanyDocumentsWithGemini } from './server/gemini.ts';
 import {
   deleteUser,
@@ -50,26 +52,90 @@ async function startServer() {
   app.use(express.json({ limit: '2mb' }));
   app.use(cookieParser());
 
-  // 1. Auth & Registration APIs
+  // 1. Authentication & Registration APIs
+  app.post('/api/auth/login', (req, res) => {
+    try {
+      const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+      const password = typeof req.body?.password === 'string' ? req.body.password : '';
+
+      if (!email || !password) {
+        res.status(400).json({ error: 'Email address and password are required.' });
+        return;
+      }
+
+      const user = findUserByEmail(email);
+      if (!user) {
+        res.status(401).json({ error: 'Invalid email address or password.' });
+        return;
+      }
+
+      if (user.status === 'pending') {
+        res.status(403).json({
+          error:
+            'Your account registration is pending verification by our Company Secretary department.',
+        });
+        return;
+      }
+
+      const isValid = verifyPassword(password, user.passwordHash);
+      if (!isValid) {
+        res.status(401).json({ error: 'Invalid email address or password.' });
+        return;
+      }
+
+      const token = createSessionToken(user.email);
+      setSessionCookie(req, res, token);
+
+      res.json({
+        user: {
+          email: user.email,
+          fullName: user.fullName,
+          role: user.role,
+          status: user.status,
+          companies: user.companies,
+        },
+        authorizedCompanies: getAllAccessibleCompanies(user),
+        cosecWhatsappNumber: COSEC_WHATSAPP_NUMBER,
+        token,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Login failed.';
+      res.status(500).json({ error: message });
+    }
+  });
+
   app.post('/api/auth/register', (req, res) => {
     try {
       const fullName =
         typeof req.body?.fullName === 'string' ? req.body.fullName.trim() : '';
-      const email = typeof req.body?.email === 'string' ? req.body.email.trim() : '';
+      const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+      const password = typeof req.body?.password === 'string' ? req.body.password : '';
+      const confirmPassword =
+        typeof req.body?.confirmPassword === 'string' ? req.body.confirmPassword : '';
       const companyName =
         typeof req.body?.companyName === 'string' ? req.body.companyName.trim() : '';
       const myCoId =
         typeof req.body?.myCoId === 'string' ? req.body.myCoId.trim() : '';
 
-      if (!fullName || !email || !companyName || !myCoId) {
+      if (!fullName || !email || !password || !confirmPassword || !companyName || !myCoId) {
         res.status(400).json({
-          error: 'All fields (Full Name, Email Address, Company Name, SSM Registration No. / MyCoID) are required.',
+          error: 'All registration fields are required.',
         });
         return;
       }
 
-      const normalizedEmail = email.toLowerCase();
-      const existing = findUserByEmail(normalizedEmail);
+      if (password !== confirmPassword) {
+        res.status(400).json({ error: 'Passwords do not match.' });
+        return;
+      }
+
+      const strength = validatePasswordStrength(password);
+      if (!strength.valid) {
+        res.status(400).json({ error: strength.message });
+        return;
+      }
+
+      const existing = findUserByEmail(email);
       if (existing) {
         res.status(409).json({
           error: 'An account with this email address already exists. Please sign in.',
@@ -77,9 +143,11 @@ async function startServer() {
         return;
       }
 
+      const passwordHash = hashPassword(password);
       const newUser = registerUser({
         fullName,
-        email: normalizedEmail,
+        email,
+        passwordHash,
         companyName,
         myCoId,
       });
@@ -89,91 +157,171 @@ async function startServer() {
         user: newUser,
       });
     } catch (err) {
-      const message =
-        err instanceof Error ? err.message : 'Registration failed.';
+      const message = err instanceof Error ? err.message : 'Registration failed.';
       res.status(400).json({ error: message });
     }
   });
 
-  app.post('/api/auth/request-otp', (req, res) => {
-    const email = typeof req.body?.email === 'string' ? req.body.email.trim() : '';
-    if (!email) {
-      res.status(400).json({ error: 'Please enter your registered corporate email address.' });
-      return;
-    }
+  // Forgot Password
+  app.post('/api/auth/forgot-password', async (req, res) => {
+    try {
+      const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+      if (!email) {
+        res.status(400).json({ error: 'Email address is required.' });
+        return;
+      }
 
-    const user = findUserByEmail(email);
-    if (!user) {
-      res.status(403).json({
-        error:
-          'This email address is not registered in the CoSec Vault Client Access Registry. Please contact your Company Secretary or register a new account.',
+      const user = findUserByEmail(email);
+      if (user && user.status === 'active') {
+        const rawToken = crypto.randomBytes(32).toString('hex');
+        const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+        const expiresAt = Date.now() + 1000 * 60 * 30; // 30 mins
+
+        upsertUser({
+          email: user.email,
+          fullName: user.fullName,
+          role: user.role,
+          status: user.status,
+          companies: user.companies,
+          requestedCompany: user.requestedCompany,
+        });
+
+        // Store token hash in user record
+        const registry = await import('./server/registry.ts');
+        const reg = registry.loadRegistry();
+        const idx = reg.users.findIndex((u: { email: string }) => u.email.toLowerCase() === email);
+        if (idx >= 0) {
+          reg.users[idx].recoveryToken = { tokenHash, expiresAt };
+          registry.saveRegistry(reg);
+        }
+
+        await sendRecoveryEmail(user.email, rawToken);
+      }
+
+      res.json({
+        message: 'If an active account exists for that email, recovery instructions have been sent.',
       });
-      return;
-    }
-
-    if (user.status === 'pending') {
-      res.status(403).json({
-        error:
-          'Your account registration is pending verification by our Company Secretary department.',
+    } catch (err) {
+      res.json({
+        message: 'If an active account exists for that email, recovery instructions have been sent.',
       });
-      return;
     }
-
-    const issued = issueOtpForEmail(user.email);
-    res.json({
-      message: `A 6-digit verification code has been dispatched to ${user.email}.`,
-      email: user.email,
-      fullName: user.fullName,
-      expiresInSeconds: issued.expiresInSeconds,
-    });
   });
 
-  app.post('/api/auth/verify-otp', (req, res) => {
-    const email = typeof req.body?.email === 'string' ? req.body.email.trim() : '';
-    const otp = typeof req.body?.otp === 'string' ? req.body.otp.trim() : '';
+  // Reset Password
+  app.post('/api/auth/reset-password', (req, res) => {
+    try {
+      const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+      const recoveryToken = typeof req.body?.recoveryToken === 'string' ? req.body.recoveryToken.trim() : '';
+      const newPassword = typeof req.body?.newPassword === 'string' ? req.body.newPassword : '';
+      const confirmPassword = typeof req.body?.confirmPassword === 'string' ? req.body.confirmPassword : '';
 
-    if (!email || !otp) {
-      res.status(400).json({ error: 'Both email address and 6-digit OTP are required.' });
-      return;
-    }
+      if (!email || !recoveryToken || !newPassword || !confirmPassword) {
+        res.status(400).json({ error: 'All fields are required.' });
+        return;
+      }
 
-    const user = findUserByEmail(email);
-    if (!user) {
-      res.status(403).json({ error: 'Email not authorized in Client Access Registry.' });
-      return;
-    }
+      if (newPassword !== confirmPassword) {
+        res.status(400).json({ error: 'Passwords do not match.' });
+        return;
+      }
 
-    if (user.status === 'pending') {
-      res.status(403).json({
-        error:
-          'Your account registration is pending verification by our Company Secretary department.',
-      });
-      return;
-    }
+      const strength = validatePasswordStrength(newPassword);
+      if (!strength.valid) {
+        res.status(400).json({ error: strength.message });
+        return;
+      }
 
-    const validOtp = verifyOtpForEmail(user.email, otp);
-    if (!validOtp) {
-      res.status(401).json({
-        error: 'Invalid or expired verification code. Please check the 6-digit OTP and try again.',
-      });
-      return;
-    }
+      const user = findUserByEmail(email);
+      if (!user || !user.recoveryToken) {
+        res.status(400).json({ error: 'Invalid or expired recovery token.' });
+        return;
+      }
 
-    const token = createSessionToken(user.email);
-    setSessionCookie(req, res, token);
+      if (Date.now() > user.recoveryToken.expiresAt) {
+        res.status(400).json({ error: 'Recovery token has expired. Please request a new one.' });
+        return;
+      }
 
-    res.json({
-      user: {
+      const providedHash = crypto.createHash('sha256').update(recoveryToken).digest('hex');
+      if (
+        providedHash.length !== user.recoveryToken.tokenHash.length ||
+        !crypto.timingSafeEqual(Buffer.from(providedHash), Buffer.from(user.recoveryToken.tokenHash))
+      ) {
+        res.status(400).json({ error: 'Invalid recovery token.' });
+        return;
+      }
+
+      const passwordHash = hashPassword(newPassword);
+      upsertUser({
         email: user.email,
         fullName: user.fullName,
         role: user.role,
         status: user.status,
         companies: user.companies,
-      },
-      authorizedCompanies: getAllAccessibleCompanies(user),
-      cosecWhatsappNumber: COSEC_WHATSAPP_NUMBER,
-      token,
-    });
+        requestedCompany: user.requestedCompany,
+      });
+
+      const registry = require('./server/registry.ts');
+      const reg = registry.loadRegistry();
+      const idx = reg.users.findIndex((u: { email: string }) => u.email.toLowerCase() === email);
+      if (idx >= 0) {
+        reg.users[idx].passwordHash = passwordHash;
+        delete reg.users[idx].recoveryToken;
+        registry.saveRegistry(reg);
+      }
+
+      res.json({ message: 'Password has been reset successfully. You can now sign in.' });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Password reset failed.';
+      res.status(400).json({ error: message });
+    }
+  });
+
+  // Change Password (Logged-in user)
+  app.post('/api/auth/change-password', requireAuth, (req: AuthenticatedRequest, res) => {
+    try {
+      const user = req.authUser!;
+      const currentPassword = typeof req.body?.currentPassword === 'string' ? req.body.currentPassword : '';
+      const newPassword = typeof req.body?.newPassword === 'string' ? req.body.newPassword : '';
+      const confirmPassword = typeof req.body?.confirmPassword === 'string' ? req.body.confirmPassword : '';
+
+      if (!currentPassword || !newPassword || !confirmPassword) {
+        res.status(400).json({ error: 'All password fields are required.' });
+        return;
+      }
+
+      const isValid = verifyPassword(currentPassword, user.passwordHash);
+      if (!isValid) {
+        res.status(401).json({ error: 'Current password is incorrect.' });
+        return;
+      }
+
+      if (newPassword !== confirmPassword) {
+        res.status(400).json({ error: 'New passwords do not match.' });
+        return;
+      }
+
+      const strength = validatePasswordStrength(newPassword);
+      if (!strength.valid) {
+        res.status(400).json({ error: strength.message });
+        return;
+      }
+
+      const passwordHash = hashPassword(newPassword);
+      const registry = require('./server/registry.ts');
+      const reg = registry.loadRegistry();
+      const idx = reg.users.findIndex((u: { email: string }) => u.email.toLowerCase() === user.email.toLowerCase());
+      if (idx >= 0) {
+        reg.users[idx].passwordHash = passwordHash;
+        registry.saveRegistry(reg);
+      }
+
+      res.json({ message: 'Password changed successfully.' });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to change password.';
+      res.status(400).json({ error: message });
+    }
   });
 
   app.get('/api/auth/me', requireAuth, (req: AuthenticatedRequest, res) => {
@@ -420,12 +568,13 @@ async function startServer() {
     requireRole('administrator', 'manager'),
     (req: AuthenticatedRequest, res) => {
       const caller = req.authUser!;
-      const email = typeof req.body?.email === 'string' ? req.body.email.trim() : '';
+      const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
       const fullName =
         typeof req.body?.fullName === 'string' ? req.body.fullName.trim() : '';
       const role = typeof req.body?.role === 'string' ? req.body.role.trim() : 'user';
       const status = typeof req.body?.status === 'string' ? req.body.status.trim() : 'active';
       const companies = Array.isArray(req.body?.companies) ? req.body.companies : [];
+      const newPassword = typeof req.body?.password === 'string' ? req.body.password : '';
 
       if (!email || !fullName) {
         res.status(400).json({ error: 'Email and full name are required.' });
@@ -437,16 +586,25 @@ async function startServer() {
         return;
       }
 
-      const existing = findUserByEmail(email);
-      const requestedCompany = existing ? existing.requestedCompany : undefined;
+      let passwordHash: string | undefined = undefined;
+      if (newPassword) {
+        const strength = validatePasswordStrength(newPassword);
+        if (!strength.valid) {
+          res.status(400).json({ error: strength.message });
+          return;
+        }
+        passwordHash = hashPassword(newPassword);
+      }
 
+      const existing = findUserByEmail(email);
       const updated = upsertUser({
         email,
         fullName,
         role: role as any,
         status: status as any,
+        passwordHash: passwordHash ?? existing?.passwordHash,
         companies,
-        requestedCompany,
+        requestedCompany: existing?.requestedCompany,
       });
       res.status(201).json({ user: updated });
     },
@@ -482,18 +640,29 @@ async function startServer() {
       const companies = Array.isArray(req.body?.companies)
         ? req.body.companies
         : existing.companies;
+      const newPassword = typeof req.body?.password === 'string' ? req.body.password : '';
 
       if (caller.role === 'manager' && role !== 'user') {
         res.status(403).json({ error: 'Managers cannot assign manager or administrator roles.' });
         return;
       }
 
-      // If status is changed to active and companies are assigned, clear requestedCompany or keep for history
+      let passwordHash = existing.passwordHash;
+      if (newPassword) {
+        const strength = validatePasswordStrength(newPassword);
+        if (!strength.valid) {
+          res.status(400).json({ error: strength.message });
+          return;
+        }
+        passwordHash = hashPassword(newPassword);
+      }
+
       const updated = upsertUser({
         email: targetEmail,
         fullName,
         role: role as any,
         status: status as any,
+        passwordHash,
         companies,
         requestedCompany: existing.requestedCompany,
       });
@@ -588,7 +757,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`CoSec Vault Registration & RBAC server running on http://0.0.0.0:${PORT}`);
+    console.log(`CoSec Vault Password Auth server running on http://0.0.0.0:${PORT}`);
   });
 }
 

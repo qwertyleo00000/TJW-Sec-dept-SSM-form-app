@@ -7,8 +7,6 @@ import type { RegistryUser } from './registry.ts';
 export const SESSION_COOKIE_NAME = 'cosec_vault_session';
 
 const SESSION_TTL_MS = 1000 * 60 * 60 * 12; // 12 hours
-const OTP_TTL_MS = 1000 * 60 * 10; // 10 minutes
-const MAX_OTP_ATTEMPTS = 5;
 
 const rawSecret = process.env.SESSION_SECRET?.trim();
 const SESSION_SECRET =
@@ -22,61 +20,62 @@ const SESSION_SECRET =
         return generated;
       })();
 
-interface OtpRecord {
-  code: string;
-  expiresAt: number;
-  attempts: number;
-}
-
-const pendingOtps = new Map<string, OtpRecord>();
-
 export interface AuthenticatedRequest extends Request {
   authUser?: RegistryUser;
 }
 
-export function issueOtpForEmail(email: string): {
-  expiresInSeconds: number;
+export function validatePasswordStrength(password: string): {
+  valid: boolean;
+  message?: string;
 } {
-  const normalized = email.trim().toLowerCase();
-  const code = String(crypto.randomInt(100000, 1000000));
-
-  pendingOtps.set(normalized, {
-    code,
-    expiresAt: Date.now() + OTP_TTL_MS,
-    attempts: 0,
-  });
-
-  return {
-    expiresInSeconds: Math.floor(OTP_TTL_MS / 1000),
-  };
+  if (typeof password !== 'string' || password.length < 12) {
+    return {
+      valid: false,
+      message: 'Password must be at least 12 characters long.',
+    };
+  }
+  if (!/[A-Z]/.test(password)) {
+    return {
+      valid: false,
+      message: 'Password must contain at least one uppercase letter (A–Z).',
+    };
+  }
+  if (!/[a-z]/.test(password)) {
+    return {
+      valid: false,
+      message: 'Password must contain at least one lowercase letter (a–z).',
+    };
+  }
+  return { valid: true };
 }
 
-export function verifyOtpForEmail(email: string, submittedOtp: string): boolean {
-  const normalized = email.trim().toLowerCase();
-  const trimmedOtp = submittedOtp.trim();
+export function hashPassword(password: string): string {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derivedKey = crypto.scryptSync(password, salt, 64, {
+    N: 16384,
+    r: 8,
+    p: 1,
+  });
+  return `${salt}:${derivedKey.toString('hex')}`;
+}
 
-  const record = pendingOtps.get(normalized);
-  if (!record) return false;
+export function verifyPassword(password: string, storedHash: string): boolean {
+  if (!storedHash || !storedHash.includes(':')) return false;
+  const [salt, keyHex] = storedHash.split(':');
+  if (!salt || !keyHex) return false;
 
-  if (Date.now() > record.expiresAt) {
-    pendingOtps.delete(normalized);
+  try {
+    const derivedKey = crypto.scryptSync(password, salt, 64, {
+      N: 16384,
+      r: 8,
+      p: 1,
+    });
+    const keyBuffer = Buffer.from(keyHex, 'hex');
+    if (derivedKey.length !== keyBuffer.length) return false;
+    return crypto.timingSafeEqual(derivedKey, keyBuffer);
+  } catch {
     return false;
   }
-
-  record.attempts += 1;
-  if (record.attempts > MAX_OTP_ATTEMPTS) {
-    pendingOtps.delete(normalized);
-    return false;
-  }
-
-  const isMatch =
-    record.code.length === trimmedOtp.length &&
-    crypto.timingSafeEqual(Buffer.from(record.code), Buffer.from(trimmedOtp));
-
-  if (isMatch) {
-    pendingOtps.delete(normalized);
-  }
-  return isMatch;
 }
 
 interface SessionPayload {

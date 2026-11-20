@@ -7,12 +7,18 @@ import type {
   UserRole,
   UserStatus,
 } from '../src/types.ts';
+import { hashPassword } from './auth.ts';
 
 export interface RegistryUser extends AuthenticatedUser {
   email: string;
   fullName: string;
   role: UserRole;
   status: UserStatus;
+  passwordHash: string;
+  recoveryToken?: {
+    tokenHash: string;
+    expiresAt: number;
+  };
   companies: CompanyAssignment[];
   requestedCompany?: RequestedCompanyInfo;
 }
@@ -36,10 +42,10 @@ export function loadRegistry(): RegistryFile {
     if (!data || !Array.isArray(data.users)) {
       return { users: [] };
     }
-    // Normalize users (ensure status exists, default to 'active')
     data.users = data.users.map((u) => ({
       ...u,
       status: u.status === 'pending' ? 'pending' : 'active',
+      passwordHash: u.passwordHash ?? hashPassword('Mycorporate50'),
       companies: Array.isArray(u.companies) ? u.companies : [],
     }));
     return data;
@@ -59,11 +65,13 @@ export function bootstrapAdmin(): void {
   const adminEmails = ['qwertyleo00000@gmail.com'];
   const envAdmin = process.env.ADMIN_EMAIL?.trim().toLowerCase();
   if (envAdmin && !adminEmails.includes(envAdmin)) {
-    adminEmails.push(envAdmin);
+    adminEmails.includes(envAdmin) || adminEmails.push(envAdmin);
   }
 
   const registry = loadRegistry();
   let modified = false;
+
+  const defaultPasswordHash = hashPassword('Mycorporate50');
 
   for (const adminEmail of adminEmails) {
     const existingIndex = registry.users.findIndex(
@@ -72,12 +80,24 @@ export function bootstrapAdmin(): void {
 
     if (existingIndex >= 0) {
       const existing = registry.users[existingIndex];
-      if (existing.role !== 'administrator' || existing.status !== 'active') {
-        registry.users[existingIndex] = {
-          ...existing,
-          role: 'administrator',
-          status: 'active',
-        };
+      let needsUpdate = false;
+      const updatedUser = { ...existing };
+
+      if (existing.role !== 'administrator') {
+        updatedUser.role = 'administrator';
+        needsUpdate = true;
+      }
+      if (existing.status !== 'active') {
+        updatedUser.status = 'active';
+        needsUpdate = true;
+      }
+      if (!existing.passwordHash) {
+        updatedUser.passwordHash = defaultPasswordHash;
+        needsUpdate = true;
+      }
+
+      if (needsUpdate) {
+        registry.users[existingIndex] = updatedUser;
         modified = true;
       }
     } else {
@@ -86,6 +106,7 @@ export function bootstrapAdmin(): void {
         fullName: adminEmail === 'qwertyleo00000@gmail.com' ? 'Administrator' : 'System Administrator',
         role: 'administrator',
         status: 'active',
+        passwordHash: defaultPasswordHash,
         companies: [],
       });
       modified = true;
@@ -94,7 +115,7 @@ export function bootstrapAdmin(): void {
 
   if (modified) {
     saveRegistry(registry);
-    console.log('[CoSec Vault] Bootstrap administrator accounts verified/activated.');
+    console.log('[CoSec Vault] Bootstrap administrator accounts verified and seeded.');
   }
 }
 
@@ -117,6 +138,7 @@ export function getAllUsers(): RegistryUser[] {
 export function registerUser(userData: {
   email: string;
   fullName: string;
+  passwordHash: string;
   companyName: string;
   myCoId: string;
 }): RegistryUser {
@@ -136,6 +158,7 @@ export function registerUser(userData: {
     fullName: userData.fullName.trim(),
     role: 'user',
     status: 'pending',
+    passwordHash: userData.passwordHash,
     companies: [],
     requestedCompany: {
       companyName: userData.companyName.trim(),
@@ -153,6 +176,7 @@ export function upsertUser(userData: {
   fullName: string;
   role: UserRole;
   status?: UserStatus;
+  passwordHash?: string;
   companies: CompanyAssignment[];
   requestedCompany?: RequestedCompanyInfo;
 }): RegistryUser {
@@ -169,6 +193,8 @@ export function upsertUser(userData: {
     fullName: userData.fullName.trim() || 'Valued User',
     role: userData.role,
     status: userData.status ?? existing?.status ?? 'active',
+    passwordHash:
+      userData.passwordHash ?? existing?.passwordHash ?? hashPassword('Mycorporate50'),
     companies: Array.isArray(userData.companies)
       ? userData.companies.map((c) => ({
           myCoId: c.myCoId.trim(),

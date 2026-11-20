@@ -48,30 +48,15 @@ async function parseJsonResponse<T>(res: Response): Promise<T> {
   return data;
 }
 
-export async function requestOtp(email: string): Promise<{
-  message: string;
-  email: string;
-  fullName: string;
-  expiresInSeconds: number;
-}> {
-  const res = await fetch('/api/auth/request-otp', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-    body: JSON.stringify({ email }),
-  });
-  return parseJsonResponse(res);
-}
-
-export async function verifyOtp(
+export async function loginWithPassword(
   email: string,
-  otp: string,
+  password: string,
 ): Promise<AuthSessionResponse> {
-  const res = await fetch('/api/auth/verify-otp', {
+  const res = await fetch('/api/auth/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
-    body: JSON.stringify({ email, otp }),
+    body: JSON.stringify({ email, password }),
   });
   const data = await parseJsonResponse<AuthSessionResponse>(res);
   if (data.token) {
@@ -83,12 +68,53 @@ export async function verifyOtp(
 export async function registerNewAccount(payload: {
   fullName: string;
   email: string;
+  password: string;
+  confirmPassword: string;
   companyName: string;
   myCoId: string;
 }): Promise<{ message: string }> {
   const res = await fetch('/api/auth/register', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse(res);
+}
+
+export async function forgotPassword(email: string): Promise<{ message: string }> {
+  const res = await fetch('/api/auth/forgot-password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ email }),
+  });
+  return parseJsonResponse(res);
+}
+
+export async function resetPassword(payload: {
+  email: string;
+  recoveryToken: string;
+  newPassword: string;
+  confirmPassword: string;
+}): Promise<{ message: string }> {
+  const res = await fetch('/api/auth/reset-password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse(res);
+}
+
+export async function changePassword(payload: {
+  currentPassword: string;
+  newPassword: string;
+  confirmPassword: string;
+}): Promise<{ message: string }> {
+  const res = await fetch('/api/auth/change-password', {
+    method: 'POST',
+    headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
     credentials: 'include',
     body: JSON.stringify(payload),
   });
@@ -266,6 +292,7 @@ export async function saveAdminUser(userData: {
   fullName: string;
   role: UserRole;
   status?: 'active' | 'pending';
+  password?: string;
   companies: CompanyAssignment[];
   isEdit?: boolean;
 }): Promise<void> {

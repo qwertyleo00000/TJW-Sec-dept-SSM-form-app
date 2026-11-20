@@ -45,6 +45,7 @@ export function UserManagementPanel({ currentUser }: UserManagementPanelProps) {
   const [fullNameInput, setFullNameInput] = useState('');
   const [roleInput, setRoleInput] = useState<UserRole>('user');
   const [statusInput, setStatusInput] = useState<UserStatus>('active');
+  const [passwordInput, setPasswordInput] = useState('');
   const [companiesInput, setCompaniesInput] = useState<CompanyAssignment[]>([
     { myCoId: '', companyName: '', driveFolderId: '' },
   ]);
@@ -81,6 +82,7 @@ export function UserManagementPanel({ currentUser }: UserManagementPanelProps) {
     setFullNameInput('');
     setRoleInput('user');
     setStatusInput('active');
+    setPasswordInput('');
     setCompaniesInput([{ myCoId: '', companyName: '', driveFolderId: '' }]);
     setRequestedCompanyInfo(null);
     setFormError(null);
@@ -100,6 +102,7 @@ export function UserManagementPanel({ currentUser }: UserManagementPanelProps) {
     setFullNameInput(u.fullName);
     setRoleInput(u.role);
     setStatusInput(u.status);
+    setPasswordInput('');
     setRequestedCompanyInfo(u.requestedCompany ?? null);
 
     let initialCompanies = u.companies;
@@ -176,6 +179,7 @@ export function UserManagementPanel({ currentUser }: UserManagementPanelProps) {
         fullName: fullNameInput,
         role: roleInput,
         status: statusInput,
+        password: passwordInput.trim() ? passwordInput : undefined,
         companies: cleanedCompanies,
         isEdit,
       });
@@ -445,7 +449,7 @@ export function UserManagementPanel({ currentUser }: UserManagementPanelProps) {
                 </div>
               </div>
 
-              <div className="grid sm:grid-cols-2 gap-4">
+              <div className="grid sm:grid-cols-3 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">
                     Access Role
@@ -455,13 +459,9 @@ export function UserManagementPanel({ currentUser }: UserManagementPanelProps) {
                     onChange={(e) => setRoleInput(e.target.value as UserRole)}
                     className="w-full px-3.5 py-2.5 text-sm text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900"
                   >
-                    <option value="user">Client User (Restricted to assigned companies)</option>
-                    <option value="manager">Manager (Can manage files &amp; user accounts)</option>
-                    {isAdmin && (
-                      <option value="administrator">
-                        Administrator (Full unrestricted access)
-                      </option>
-                    )}
+                    <option value="user">Client User</option>
+                    <option value="manager">Manager</option>
+                    {isAdmin && <option value="administrator">Administrator</option>}
                   </select>
                 </div>
 
@@ -474,9 +474,22 @@ export function UserManagementPanel({ currentUser }: UserManagementPanelProps) {
                     onChange={(e) => setStatusInput(e.target.value as UserStatus)}
                     className="w-full px-3.5 py-2.5 text-sm text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900"
                   >
-                    <option value="active">Active (Can sign in)</option>
-                    <option value="pending">Pending Approval (Blocked from sign in)</option>
+                    <option value="active">Active</option>
+                    <option value="pending">Pending Approval</option>
                   </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">
+                    Reset Password <span className="font-normal text-slate-400">(Optional)</span>
+                  </label>
+                  <input
+                    type="password"
+                    value={passwordInput}
+                    onChange={(e) => setPasswordInput(e.target.value)}
+                    placeholder="Leave blank to keep"
+                    className="w-full px-3.5 py-2.5 text-sm text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900"
+                  />
                 </div>
               </div>
 
