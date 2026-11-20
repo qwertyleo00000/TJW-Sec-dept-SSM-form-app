@@ -1,7 +1,5 @@
-import { google } from 'googleapis';
 import { Readable } from 'stream';
-import type { DocumentCategory, StatutoryDocument } from '../src/types.ts';
-import type { CompanyAssignment } from '../src/types.ts';
+import type { DocumentCategory, StatutoryDocument, CompanyAssignment } from '../src/types.ts';
 
 export function classifyStatutoryFile(fileName: string): {
   statutorySection: string;
@@ -39,157 +37,130 @@ export function classifyStatutoryFile(fileName: string): {
   return { statutorySection: 'Statutory Filing', category: 'Other' };
 }
 
-function getDriveClient() {
-  const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim();
-  const rawKey = process.env.GOOGLE_PRIVATE_KEY?.trim();
-  if (!email || !rawKey) {
-    throw new Error(
-      'Google Drive Service Account credentials (GOOGLE_SERVICE_ACCOUNT_EMAIL and GOOGLE_PRIVATE_KEY) are missing. Please configure them in your environment variables.',
-    );
+export function extractDriveFolderId(input: string): string {
+  if (!input) return '';
+  const trimmed = input.trim();
+  const matchUrl = trimmed.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+  if (matchUrl && matchUrl[1]) {
+    return matchUrl[1];
   }
-  const privateKey = rawKey.replace(/\\n/g, '\n');
-
-  const auth = new google.auth.JWT({
-    email,
-    key: privateKey,
-    scopes: ['https://www.googleapis.com/auth/drive'],
-  });
-
-  return google.drive({ version: 'v3', auth });
+  const matchParam = trimmed.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  if (matchParam && matchParam[1]) {
+    return matchParam[1];
+  }
+  return trimmed;
 }
 
 export async function listDocumentsForFolder(
-  driveFolderId: string,
+  folderLinkOrId: string,
 ): Promise<StatutoryDocument[]> {
-  const drive = getDriveClient();
-  const safeFolderId = driveFolderId.replace(/'/g, "\\'");
-  const response = await drive.files.list({
-    q: `'${safeFolderId}' in parents and mimeType = 'application/pdf' and trashed = false`,
-    fields: 'files(id, name, modifiedTime, size)',
-    orderBy: 'modifiedTime desc',
-    pageSize: 100,
-    supportsAllDrives: true,
-    includeItemsFromAllDrives: true,
+  const folderId = extractDriveFolderId(folderLinkOrId);
+  if (!folderId) {
+    throw new Error('Invalid Google Drive folder link or ID.');
+  }
+
+  const url = `https://drive.google.com/embeddedfolderview?id=${encodeURIComponent(folderId)}#list`;
+  const res = await fetch(url, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    },
   });
 
-  const files = response.data.files ?? [];
-  return files
-    .filter(
-      (
-        f,
-      ): f is {
-        id: string;
-        name: string;
-        modifiedTime?: string | null;
-        size?: string | null;
-      } => Boolean(f.id && f.name),
-    )
-    .map((file) => {
-      const { statutorySection, category } = classifyStatutoryFile(file.name);
-      const sizeBytes = file.size ? Number(file.size) : 0;
-      return {
-        fileId: file.id,
-        fileName: file.name,
+  if (!res.ok) {
+    throw new Error(
+      `Unable to access Google Drive folder (${res.status}). Please ensure folder sharing is set to "Anyone with the link -> Viewer".`,
+    );
+  }
+
+  const html = await res.text();
+  if (html.includes('Restricted') || html.includes('Sign in') || html.includes('You need access')) {
+    throw new Error(
+      'Google Drive folder access is Restricted. Please set folder access to "Anyone with the link (Viewer)" in Google Drive.',
+    );
+  }
+
+  const documents: StatutoryDocument[] = [];
+  const itemRegex = /<div class="folder-item[^"]*"[^>]*>[\s\S]*?href="[^"]*\/file\/d\/([a-zA-Z0-9_-]+)\/view"[^>]*>[\s\S]*?class="filename"[^>]*>([^<]+)<\/div>/g;
+
+  let match;
+  while ((match = itemRegex.exec(html)) !== null) {
+    const fileId = match[1];
+    const fileName = match[2].trim();
+    if (fileId && fileName && (fileName.toLowerCase().endsWith('.pdf') || fileName.toLowerCase().includes('.pdf'))) {
+      const { statutorySection, category } = classifyStatutoryFile(fileName);
+      documents.push({
+        fileId,
+        fileName,
         statutorySection,
         category,
-        lastUpdated: file.modifiedTime ?? new Date().toISOString(),
-        fileSizeKB: Math.max(1, Math.round(sizeBytes / 1024)),
-      };
-    });
+        lastUpdated: new Date().toISOString(),
+        fileSizeKB: 250,
+      });
+    }
+  }
+
+  if (documents.length === 0) {
+    const altRegex = /href="[^"]*drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)\/[^"]*"[^>]*>([^<]+)</g;
+    let altMatch;
+    const seen = new Set<string>();
+    while ((altMatch = altRegex.exec(html)) !== null) {
+      const fileId = altMatch[1];
+      const rawName = altMatch[2].trim();
+      if (fileId && rawName && !seen.has(fileId)) {
+        seen.add(fileId);
+        const fileName = rawName.toLowerCase().endsWith('.pdf') ? rawName : `${rawName}.pdf`;
+        const { statutorySection, category } = classifyStatutoryFile(fileName);
+        documents.push({
+          fileId,
+          fileName,
+          statutorySection,
+          category,
+          lastUpdated: new Date().toISOString(),
+          fileSizeKB: 250,
+        });
+      }
+    }
+  }
+
+  return documents;
 }
 
 export async function getDownloadableFile(
-  company: CompanyAssignment,
+  _company: CompanyAssignment,
   fileId: string,
 ): Promise<{ kind: 'stream'; fileName: string; stream: Readable } | null> {
-  const drive = getDriveClient();
-  const meta = await drive.files.get({
-    fileId,
-    fields: 'id, name, mimeType, parents, trashed',
-    supportsAllDrives: true,
+  const downloadUrl = `https://drive.google.com/uc?export=download&id=${encodeURIComponent(fileId)}`;
+  const res = await fetch(downloadUrl, {
+    redirect: 'follow',
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    },
   });
 
-  const file = meta.data;
-  if (
-    !file ||
-    file.trashed ||
-    !file.parents ||
-    !file.parents.includes(company.driveFolderId)
-  ) {
+  if (!res.ok || !res.body) {
     return null;
   }
 
-  const mediaRes = await drive.files.get(
-    { fileId, alt: 'media', supportsAllDrives: true },
-    { responseType: 'stream' },
-  );
-
+  const nodeStream = Readable.fromWeb(res.body as any);
   return {
     kind: 'stream',
-    fileName: file.name ?? `${fileId}.pdf`,
-    stream: mediaRes.data as Readable,
+    fileName: `${fileId}.pdf`,
+    stream: nodeStream,
   };
 }
 
 export async function uploadFileToFolder(
-  driveFolderId: string,
-  fileBuffer: Buffer,
-  fileName: string,
-  mimeType = 'application/pdf',
+  _folderId: string,
+  _fileBuffer: Buffer,
+  _fileName: string,
 ): Promise<StatutoryDocument> {
-  const drive = getDriveClient();
-  const stream = new Readable();
-  stream.push(fileBuffer);
-  stream.push(null);
-
-  const response = await drive.files.create({
-    requestBody: {
-      name: fileName,
-      parents: [driveFolderId],
-    },
-    media: {
-      mimeType,
-      body: stream,
-    },
-    fields: 'id, name, modifiedTime, size',
-    supportsAllDrives: true,
-  });
-
-  const file = response.data;
-  const { statutorySection, category } = classifyStatutoryFile(file.name ?? fileName);
-  const sizeBytes = file.size ? Number(file.size) : fileBuffer.length;
-
-  return {
-    fileId: file.id ?? `file-${Date.now()}`,
-    fileName: file.name ?? fileName,
-    statutorySection,
-    category,
-    lastUpdated: file.modifiedTime ?? new Date().toISOString(),
-    fileSizeKB: Math.max(1, Math.round(sizeBytes / 1024)),
-  };
+  throw new Error('Managed via linked Google Drive folder. Please add, rename, or remove PDFs directly inside your shared Google Drive folder.');
 }
 
-export async function renameFile(
-  fileId: string,
-  newFileName: string,
-): Promise<void> {
-  const drive = getDriveClient();
-  await drive.files.update({
-    fileId,
-    requestBody: {
-      name: newFileName,
-    },
-    supportsAllDrives: true,
-  });
+export async function renameFile(): Promise<void> {
+  throw new Error('Managed via linked Google Drive folder. Please add, rename, or remove PDFs directly inside your shared Google Drive folder.');
 }
 
-export async function deleteFile(fileId: string): Promise<void> {
-  const drive = getDriveClient();
-  await drive.files.update({
-    fileId,
-    requestBody: {
-      trashed: true,
-    },
-    supportsAllDrives: true,
-  });
+export async function deleteFile(): Promise<void> {
+  throw new Error('Managed via linked Google Drive folder. Please add, rename, or remove PDFs directly inside your shared Google Drive folder.');
 }

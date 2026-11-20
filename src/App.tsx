@@ -13,6 +13,7 @@ import {
   fetchCompanyDocuments,
   fetchCurrentSession,
   logoutSession,
+  recordCtcClick,
   renameStatutoryFile,
   uploadStatutoryPdf,
 } from './lib/api';
@@ -22,6 +23,7 @@ import {
   formatFilingDate,
 } from './lib/whatsapp';
 import { AiConciergePanel } from './components/AiConciergePanel';
+import { AuditTrailPanel } from './components/AuditTrailPanel';
 import { WhatsAppIcon } from './components/BrandMark';
 import { DocumentTable } from './components/DocumentTable';
 import { LoginScreen } from './components/LoginScreen';
@@ -35,7 +37,7 @@ export default function App() {
   const [session, setSession] = useState<AuthSessionResponse | null>(null);
   const [initializing, setInitializing] = useState(true);
   const [activeMyCoId, setActiveMyCoId] = useState<string>('');
-  const [currentTab, setCurrentTab] = useState<'vault' | 'users'>('vault');
+  const [currentTab, setCurrentTab] = useState<'vault' | 'users' | 'audit'>('vault');
 
   const [documents, setDocuments] = useState<StatutoryDocument[]>([]);
   const [docsLoading, setDocsLoading] = useState(false);
@@ -226,7 +228,10 @@ export default function App() {
     showToast('Document deleted successfully', 'success');
   }
 
-  function handleCtcClick(_doc: StatutoryDocument) {
+  function handleCtcClick(doc: StatutoryDocument) {
+    if (activeCompany) {
+      recordCtcClick(activeCompany.myCoId, activeCompany.companyName, doc.fileName);
+    }
     showToast(
       'Opening WhatsApp to send your CTC request to our Company Secretary team...',
       'info',
@@ -300,6 +305,8 @@ export default function App() {
       <main className="flex-1 max-w-[1240px] w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
         {currentTab === 'users' && isAdminOrManager ? (
           <UserManagementPanel currentUser={session.user} />
+        ) : currentTab === 'audit' ? (
+          <AuditTrailPanel currentUser={session.user} />
         ) : !activeCompany ? (
           <div className="bg-white rounded-xl border border-slate-200 p-8 sm:p-12 text-center max-w-xl mx-auto my-12 shadow-xs space-y-4">
             <div className="w-14 h-14 bg-amber-50 text-amber-600 rounded-full flex items-center justify-center mx-auto">

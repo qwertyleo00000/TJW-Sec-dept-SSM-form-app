@@ -8,6 +8,7 @@ import {
   FileText,
   Filter,
   Loader2,
+  RefreshCw,
   Search,
   Trash2,
   X,
@@ -177,18 +178,19 @@ export function DocumentTable({
 
         <div className="flex items-center gap-3 w-full md:w-auto">
           {isAdminOrManager && (
-            <button
-              type="button"
-              onClick={() => {
-                setSelectedFile(null);
-                setUploadError(null);
-                setUploadModalOpen(true);
-              }}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-700 text-white text-xs sm:text-sm font-semibold hover:bg-emerald-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <FilePlus className="w-4 h-4" />
-              <span>Upload PDF</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={onRetry}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 bg-white text-xs sm:text-sm font-semibold text-slate-800 hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <RefreshCw className="w-4 h-4 text-slate-600" />
+                <span>Refresh from Google Drive</span>
+              </button>
+              <span className="hidden xl:inline text-[11px] text-slate-500 italic">
+                Managed via linked Google Drive folder
+              </span>
+            </div>
           )}
 
           <div className="relative w-full md:w-64">

@@ -63,3 +63,33 @@ export interface MissingFormSubmission {
   notes: string;
   submittedAt: string;
 }
+
+export type AuditActionType =
+  | 'LOGIN'
+  | 'LOGOUT'
+  | 'VAULT_VISIT'
+  | 'DOCUMENT_DOWNLOAD'
+  | 'CTC_WHATSAPP_REQUEST'
+  | 'MISSING_FORM_REQUEST'
+  | 'FILE_UPLOAD'
+  | 'FILE_RENAME'
+  | 'FILE_DELETE'
+  | 'USER_REGISTERED'
+  | 'USER_UPDATED'
+  | 'USER_DELETED'
+  | 'PASSWORD_CHANGED';
+
+export interface AuditLogEntry {
+  id: string;
+  timestamp: string; // ISO 8601 UTC timestamp
+  userEmail: string;
+  userName: string;
+  userRole: 'administrator' | 'manager' | 'user';
+  action: AuditActionType;
+  companyName?: string;
+  myCoId?: string;
+  documentName?: string;
+  details?: string;
+  ipAddress?: string;
+}
+

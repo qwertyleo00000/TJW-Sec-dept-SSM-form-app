@@ -1,6 +1,7 @@
 import type {
   AiSearchResponse,
   AuthSessionResponse,
+  AuditLogEntry,
   CompanyAssignment,
   MissingFormSubmission,
   StatutoryDocument,
@@ -351,3 +352,81 @@ export async function submitMissingFormRequest(
   const data = await parseJsonResponse<{ submission: MissingFormSubmission }>(res);
   return data.submission;
 }
+
+export async function recordCtcClick(
+  myCoId: string,
+  companyName: string,
+  documentName: string,
+): Promise<void> {
+  try {
+    await fetch('/api/audit/ctc-click', {
+      method: 'POST',
+      headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
+      credentials: 'include',
+      body: JSON.stringify({ myCoId, companyName, documentName }),
+    });
+  } catch {
+    // Non-blocking telemetry
+  }
+}
+
+export async function fetchAuditLogs(filters?: {
+  email?: string;
+  myCoId?: string;
+  action?: string;
+  fromDate?: string;
+  toDate?: string;
+}): Promise<AuditLogEntry[]> {
+  const params = new URLSearchParams();
+  if (filters?.email) params.set('email', filters.email);
+  if (filters?.myCoId) params.set('myCoId', filters.myCoId);
+  if (filters?.action) params.set('action', filters.action);
+  if (filters?.fromDate) params.set('fromDate', filters.fromDate);
+  if (filters?.toDate) params.set('toDate', filters.toDate);
+
+  const query = params.toString() ? `?${params.toString()}` : '';
+  const res = await fetch(`/api/audit/logs${query}`, {
+    method: 'GET',
+    headers: buildAuthHeaders(),
+    credentials: 'include',
+  });
+  const data = await parseJsonResponse<{ logs: AuditLogEntry[] }>(res);
+  return data.logs;
+}
+
+export function getAuditCsvDownloadUrl(filters?: {
+  email?: string;
+  myCoId?: string;
+  action?: string;
+  fromDate?: string;
+  toDate?: string;
+}): string {
+  const params = new URLSearchParams();
+  if (filters?.email) params.set('email', filters.email);
+  if (filters?.myCoId) params.set('myCoId', filters.myCoId);
+  if (filters?.action) params.set('action', filters.action);
+  if (filters?.fromDate) params.set('fromDate', filters.fromDate);
+  if (filters?.toDate) params.set('toDate', filters.toDate);
+
+  const token = getStoredToken();
+  if (token) {
+    params.set('token', token);
+  }
+
+  const query = params.toString() ? `?${params.toString()}` : '';
+  return `/api/audit/export.csv${query}`;
+}
+
+export async function verifyDriveFolder(
+  driveFolderId: string,
+): Promise<{ ok: boolean; count: number; documents: StatutoryDocument[] }> {
+  const res = await fetch('/api/admin/drive/verify-folder', {
+    method: 'POST',
+    headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
+    credentials: 'include',
+    body: JSON.stringify({ driveFolderId }),
+  });
+  return parseJsonResponse(res);
+}
+
+

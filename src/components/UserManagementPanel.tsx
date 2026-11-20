@@ -18,6 +18,7 @@ import {
   deleteAdminUser,
   fetchAdminUsers,
   saveAdminUser,
+  verifyDriveFolder,
 } from '../lib/api';
 
 interface UserManagementPanelProps {
@@ -56,8 +57,38 @@ export function UserManagementPanel({ currentUser }: UserManagementPanelProps) {
 
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [testingIdx, setTestingIdx] = useState<number | null>(null);
+  const [testResult, setTestResult] = useState<
+    Record<number, { ok?: boolean; message?: string }>
+  >({});
 
   const isAdmin = currentUser.role === 'administrator';
+
+  async function handleTestFolder(idx: number, link: string) {
+    if (!link.trim()) return;
+    setTestingIdx(idx);
+    setTestResult((prev) => ({ ...prev, [idx]: {} }));
+    try {
+      const res = await verifyDriveFolder(link);
+      setTestResult((prev) => ({
+        ...prev,
+        [idx]: {
+          ok: true,
+          message: `Success! Detected ${res.count} PDF file(s) in shared folder.`,
+        },
+      }));
+    } catch (err) {
+      setTestResult((prev) => ({
+        ...prev,
+        [idx]: {
+          ok: false,
+          message: err instanceof Error ? err.message : 'Verification failed.',
+        },
+      }));
+    } finally {
+      setTestingIdx(null);
+    }
+  }
 
   async function loadUsers() {
     setLoading(true);
@@ -546,31 +577,65 @@ export function UserManagementPanel({ currentUser }: UserManagementPanelProps) {
                           />
                         </div>
                       </div>
-                      <div className="flex items-center gap-3">
-                        <div className="flex-1">
-                          <label className="block text-xs font-medium text-slate-600 mb-1">
-                            Google Drive Folder ID
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <label className="block text-xs font-medium text-slate-600">
+                            Google Drive Shared Folder Link
                           </label>
-                          <input
-                            type="text"
-                            required
-                            value={comp.driveFolderId}
-                            onChange={(e) =>
-                              updateCompanyRow(idx, 'driveFolderId', e.target.value)
-                            }
-                            placeholder="1A2B3C4D5E6F7G8H9I0J_ALPHA"
-                            className="w-full px-3 py-2 text-xs font-mono text-slate-900 bg-white border border-slate-300 rounded-lg"
-                          />
-                        </div>
-                        {companiesInput.length > 1 && (
                           <button
                             type="button"
-                            onClick={() => removeCompanyRow(idx)}
-                            aria-label="Remove company"
-                            className="self-end p-2 rounded-lg border border-red-200 bg-white text-red-600 hover:bg-red-50 cursor-pointer"
+                            onClick={() => handleTestFolder(idx, comp.driveFolderId)}
+                            disabled={testingIdx === idx || !comp.driveFolderId.trim()}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-200 text-slate-800 text-[11px] font-semibold hover:bg-slate-300 disabled:opacity-50 transition-colors cursor-pointer"
                           >
-                            <Trash2 className="w-4 h-4" />
+                            {testingIdx === idx ? (
+                              <>
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                                <span>Testing...</span>
+                              </>
+                            ) : (
+                              <span>Test Folder Link</span>
+                            )}
                           </button>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <div className="flex-1">
+                            <input
+                              type="text"
+                              required
+                              value={comp.driveFolderId}
+                              onChange={(e) =>
+                                updateCompanyRow(idx, 'driveFolderId', e.target.value)
+                              }
+                              placeholder="https://drive.google.com/drive/folders/... or Folder ID"
+                              className="w-full px-3 py-2 text-xs font-mono text-slate-900 bg-white border border-slate-300 rounded-lg"
+                            />
+                          </div>
+                          {companiesInput.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => removeCompanyRow(idx)}
+                              aria-label="Remove company"
+                              className="self-end p-2 rounded-lg border border-red-200 bg-white text-red-600 hover:bg-red-50 cursor-pointer"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-slate-500">
+                          In Google Drive, set folder access to &quot;Anyone with the link (Viewer)&quot; and paste the link here.
+                        </p>
+                        {testResult[idx] && (
+                          <div
+                            role="alert"
+                            className={`p-2 rounded text-[11px] ${
+                              testResult[idx]?.ok
+                                ? 'bg-emerald-50 border border-emerald-200 text-emerald-800'
+                                : 'bg-red-50 border border-red-200 text-red-800'
+                            }`}
+                          >
+                            {testResult[idx]?.message}
+                          </div>
                         )}
                       </div>
                     </div>

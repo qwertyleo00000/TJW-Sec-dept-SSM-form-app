@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import {
+  Activity,
   Building2,
   Check,
   ChevronDown,
@@ -21,8 +22,8 @@ interface TopNavProps {
   activeCompany: CompanyAssignment | null;
   onSelectCompany: (company: CompanyAssignment) => void;
   onLogout: () => void;
-  currentTab: 'vault' | 'users';
-  onTabChange: (tab: 'vault' | 'users') => void;
+  currentTab: 'vault' | 'users' | 'audit';
+  onTabChange: (tab: 'vault' | 'users' | 'audit') => void;
 }
 
 export function TopNav({
@@ -134,22 +135,22 @@ export function TopNav({
           </div>
         </div>
 
-        {/* Admin/Manager Tab Switcher or Company Switcher */}
+        {/* Tab Switcher */}
         <div className="flex items-center gap-4 flex-1 max-w-xl justify-center">
-          {isAdminOrManager && (
-            <div className="hidden md:flex items-center gap-1 bg-slate-100 p-1 rounded-lg">
-              <button
-                type="button"
-                onClick={() => onTabChange('vault')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-colors cursor-pointer ${
-                  currentTab === 'vault'
-                    ? 'bg-white text-slate-900 shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <Vault className="w-3.5 h-3.5" />
-                <span>Statutory Vault</span>
-              </button>
+          <div className="hidden md:flex items-center gap-1 bg-slate-100 p-1 rounded-lg">
+            <button
+              type="button"
+              onClick={() => onTabChange('vault')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-colors cursor-pointer ${
+                currentTab === 'vault'
+                  ? 'bg-white text-slate-900 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Vault className="w-3.5 h-3.5" />
+              <span>Statutory Vault</span>
+            </button>
+            {isAdminOrManager && (
               <button
                 type="button"
                 onClick={() => onTabChange('users')}
@@ -162,8 +163,20 @@ export function TopNav({
                 <Users className="w-3.5 h-3.5" />
                 <span>Access Rights &amp; Users</span>
               </button>
-            </div>
-          )}
+            )}
+            <button
+              type="button"
+              onClick={() => onTabChange('audit')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-colors cursor-pointer ${
+                currentTab === 'audit'
+                  ? 'bg-white text-slate-900 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Activity className="w-3.5 h-3.5" />
+              <span>Activity &amp; Audit Log</span>
+            </button>
+          </div>
 
           {currentTab === 'vault' && activeCompany && (
             <div ref={dropdownRef} className="relative min-w-0 w-full max-w-sm">
@@ -285,19 +298,19 @@ export function TopNav({
         </div>
       </div>
 
-      {/* Mobile Tab bar for admin/manager */}
-      {isAdminOrManager && (
-        <div className="flex md:hidden border-t border-slate-200 bg-slate-50 p-1">
-          <button
-            type="button"
-            onClick={() => onTabChange('vault')}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-semibold ${
-              currentTab === 'vault' ? 'bg-white text-slate-950 shadow-xs' : 'text-slate-600'
-            }`}
-          >
-            <Vault className="w-3.5 h-3.5" />
-            <span>Vault</span>
-          </button>
+      {/* Mobile Tab bar */}
+      <div className="flex md:hidden border-t border-slate-200 bg-slate-50 p-1">
+        <button
+          type="button"
+          onClick={() => onTabChange('vault')}
+          className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-semibold ${
+            currentTab === 'vault' ? 'bg-white text-slate-950 shadow-xs' : 'text-slate-600'
+          }`}
+        >
+          <Vault className="w-3.5 h-3.5" />
+          <span>Vault</span>
+        </button>
+        {isAdminOrManager && (
           <button
             type="button"
             onClick={() => onTabChange('users')}
@@ -306,10 +319,20 @@ export function TopNav({
             }`}
           >
             <Users className="w-3.5 h-3.5" />
-            <span>Users &amp; Access</span>
+            <span>Users</span>
           </button>
-        </div>
-      )}
+        )}
+        <button
+          type="button"
+          onClick={() => onTabChange('audit')}
+          className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-semibold ${
+            currentTab === 'audit' ? 'bg-white text-slate-950 shadow-xs' : 'text-slate-600'
+          }`}
+        >
+          <Activity className="w-3.5 h-3.5" />
+          <span>Audit</span>
+        </button>
+      </div>
 
       {/* Change Password Modal */}
       {passwordModalOpen && (

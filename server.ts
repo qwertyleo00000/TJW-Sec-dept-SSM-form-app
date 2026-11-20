@@ -34,6 +34,7 @@ import {
   registerUser,
   upsertUser,
 } from './server/registry.ts';
+import { recordAuditEvent, readAuditLogs } from './server/audit.ts';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const COSEC_WHATSAPP_NUMBER =
@@ -85,6 +86,14 @@ async function startServer() {
 
       const token = createSessionToken(user.email);
       setSessionCookie(req, res, token);
+
+      recordAuditEvent({
+        userEmail: user.email,
+        userName: user.fullName,
+        userRole: user.role,
+        action: 'LOGIN',
+        ipAddress: req.ip || (req.headers['x-forwarded-for'] as string),
+      });
 
       res.json({
         ok: true,
@@ -151,6 +160,16 @@ async function startServer() {
         passwordHash,
         companyName,
         myCoId,
+      });
+
+      recordAuditEvent({
+        userEmail: email,
+        userName: fullName,
+        userRole: 'user',
+        action: 'USER_REGISTERED',
+        companyName,
+        myCoId,
+        ipAddress: req.ip || (req.headers['x-forwarded-for'] as string),
       });
 
       res.status(201).json({
@@ -319,6 +338,14 @@ async function startServer() {
         registry.saveRegistry(reg);
       }
 
+      recordAuditEvent({
+        userEmail: user.email,
+        userName: user.fullName,
+        userRole: user.role,
+        action: 'PASSWORD_CHANGED',
+        ipAddress: req.ip || (req.headers['x-forwarded-for'] as string),
+      });
+
       res.json({ message: 'Password changed successfully.' });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to change password.';
@@ -342,6 +369,31 @@ async function startServer() {
   });
 
   app.post('/api/auth/logout', (req, res) => {
+    try {
+      const token =
+        req.cookies?.cosec_vault_auth_token ||
+        req.headers.authorization?.replace(/^Bearer\s+/i, '');
+      if (token) {
+        const parts = token.split('.');
+        if (parts.length === 2) {
+          const payload = JSON.parse(
+            Buffer.from(parts[0], 'base64').toString('utf-8')
+          );
+          if (payload.email) {
+            const user = findUserByEmail(payload.email);
+            if (user) {
+              recordAuditEvent({
+                userEmail: user.email,
+                userName: user.fullName,
+                userRole: user.role,
+                action: 'LOGOUT',
+                ipAddress: req.ip || (req.headers['x-forwarded-for'] as string),
+              });
+            }
+          }
+        }
+      }
+    } catch {}
     clearSessionCookie(req, res);
     res.json({ success: true });
   });
@@ -363,6 +415,16 @@ async function startServer() {
         }
 
         const documents = await listDocumentsForFolder(company.driveFolderId);
+        recordAuditEvent({
+          userEmail: user.email,
+          userName: user.fullName,
+          userRole: user.role,
+          action: 'VAULT_VISIT',
+          companyName: company.companyName,
+          myCoId: company.myCoId,
+          ipAddress: req.ip || (req.headers['x-forwarded-for'] as string),
+        });
+
         res.json({
           company: {
             myCoId: company.myCoId,
@@ -445,6 +507,17 @@ async function startServer() {
           return;
         }
 
+        recordAuditEvent({
+          userEmail: user.email,
+          userName: user.fullName,
+          userRole: user.role,
+          action: 'DOCUMENT_DOWNLOAD',
+          companyName: company.companyName,
+          myCoId: company.myCoId,
+          documentName: file.fileName,
+          ipAddress: req.ip || (req.headers['x-forwarded-for'] as string),
+        });
+
         const sanitizedFileName = file.fileName.replace(/["\r\n]/g, '_');
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader(
@@ -476,36 +549,11 @@ async function startServer() {
     requireAuth,
     requireRole('administrator', 'manager'),
     upload.single('file'),
-    async (req: AuthenticatedRequest, res) => {
-      try {
-        const myCoId = typeof req.body?.myCoId === 'string' ? req.body.myCoId.trim() : '';
-        const file = req.file;
-
-        if (!myCoId || !file) {
-          res.status(400).json({ error: 'Company ID and PDF file are required for upload.' });
-          return;
-        }
-
-        const user = req.authUser!;
-        const company = getAuthorizedCompany(user, myCoId);
-        if (!company) {
-          res.status(403).json({ error: 'Access denied to target company folder.' });
-          return;
-        }
-
-        const newDoc = await uploadFileToFolder(
-          company.driveFolderId,
-          file.buffer,
-          file.originalname || 'Statutory_Filing.pdf',
-          file.mimetype || 'application/pdf',
-        );
-
-        res.status(201).json({ document: newDoc });
-      } catch (err) {
-        const message =
-          err instanceof Error ? err.message : 'Failed to upload statutory document.';
-        res.status(500).json({ error: message });
-      }
+    async (_req: AuthenticatedRequest, res) => {
+      res.status(400).json({
+        error:
+          'Managed via linked Google Drive folder. Please add PDFs directly inside your shared Google Drive folder.',
+      });
     },
   );
 
@@ -513,26 +561,11 @@ async function startServer() {
     '/api/admin/files/:fileId',
     requireAuth,
     requireRole('administrator', 'manager'),
-    async (req: AuthenticatedRequest, res) => {
-      try {
-        const fileId = String(req.params.fileId);
-        const newFileName =
-          typeof req.body?.newFileName === 'string'
-            ? req.body.newFileName.trim()
-            : '';
-
-        if (!newFileName) {
-          res.status(400).json({ error: 'New file name is required.' });
-          return;
-        }
-
-        await renameFile(fileId, newFileName);
-        res.json({ success: true });
-      } catch (err) {
-        const message =
-          err instanceof Error ? err.message : 'Failed to rename statutory document.';
-        res.status(500).json({ error: message });
-      }
+    async (_req: AuthenticatedRequest, res) => {
+      res.status(400).json({
+        error:
+          'Managed via linked Google Drive folder. Please rename PDFs directly inside your shared Google Drive folder.',
+      });
     },
   );
 
@@ -540,16 +573,11 @@ async function startServer() {
     '/api/admin/files/:fileId',
     requireAuth,
     requireRole('administrator', 'manager'),
-    async (req: AuthenticatedRequest, res) => {
-      try {
-        const fileId = String(req.params.fileId);
-        await deleteFile(fileId);
-        res.json({ success: true });
-      } catch (err) {
-        const message =
-          err instanceof Error ? err.message : 'Failed to delete statutory document.';
-        res.status(500).json({ error: message });
-      }
+    async (_req: AuthenticatedRequest, res) => {
+      res.status(400).json({
+        error:
+          'Managed via linked Google Drive folder. Please delete PDFs directly inside your shared Google Drive folder.',
+      });
     },
   );
 
@@ -608,6 +636,16 @@ async function startServer() {
         companies,
         requestedCompany: existing?.requestedCompany,
       });
+
+      recordAuditEvent({
+        userEmail: caller.email,
+        userName: caller.fullName,
+        userRole: caller.role,
+        action: 'USER_REGISTERED',
+        details: `Created / Upserted user account: ${email} (Role: ${role})`,
+        ipAddress: req.ip || (req.headers['x-forwarded-for'] as string),
+      });
+
       res.status(201).json({ user: updated });
     },
   );
@@ -668,6 +706,16 @@ async function startServer() {
         companies,
         requestedCompany: existing.requestedCompany,
       });
+
+      recordAuditEvent({
+        userEmail: caller.email,
+        userName: caller.fullName,
+        userRole: caller.role,
+        action: 'USER_UPDATED',
+        details: `Updated user account: ${targetEmail} (Role: ${role}, Status: ${status})`,
+        ipAddress: req.ip || (req.headers['x-forwarded-for'] as string),
+      });
+
       res.json({ user: updated });
     },
   );
@@ -702,7 +750,36 @@ async function startServer() {
         return;
       }
 
+      recordAuditEvent({
+        userEmail: caller.email,
+        userName: caller.fullName,
+        userRole: caller.role,
+        action: 'USER_DELETED',
+        details: `Deleted user account: ${targetEmail}`,
+        ipAddress: req.ip || (req.headers['x-forwarded-for'] as string),
+      });
+
       res.json({ success: true });
+    },
+  );
+
+  app.post(
+    '/api/admin/drive/verify-folder',
+    requireAuth,
+    requireRole('administrator', 'manager'),
+    async (req: AuthenticatedRequest, res) => {
+      try {
+        const driveFolderId = typeof req.body?.driveFolderId === 'string' ? req.body.driveFolderId.trim() : '';
+        if (!driveFolderId) {
+          res.status(400).json({ error: 'Google Drive folder link or ID is required.' });
+          return;
+        }
+        const documents = await listDocumentsForFolder(driveFolderId);
+        res.json({ ok: true, count: documents.length, documents });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to verify Google Drive folder.';
+        res.status(400).json({ error: message });
+      }
     },
   );
 
@@ -739,8 +816,215 @@ async function startServer() {
       };
 
       missingFormRequests.unshift(submission);
+
+      recordAuditEvent({
+        userEmail: user.email,
+        userName: user.fullName,
+        userRole: user.role,
+        action: 'MISSING_FORM_REQUEST',
+        companyName: company.companyName,
+        myCoId: company.myCoId,
+        documentName: formName,
+        details: notes || undefined,
+        ipAddress: req.ip || (req.headers['x-forwarded-for'] as string),
+      });
+
       res.status(201).json({ submission });
     },
+  );
+
+  // 5. Activity & Audit Trail APIs
+  app.post('/api/audit/ctc-click', requireAuth, (req: AuthenticatedRequest, res) => {
+    const user = req.authUser!;
+    const myCoId = typeof req.body?.myCoId === 'string' ? req.body.myCoId.trim() : '';
+    const documentName = typeof req.body?.documentName === 'string' ? req.body.documentName.trim() : '';
+    const companyName = typeof req.body?.companyName === 'string' ? req.body.companyName.trim() : undefined;
+    const company = getAuthorizedCompany(user, myCoId);
+
+    recordAuditEvent({
+      userEmail: user.email,
+      userName: user.fullName,
+      userRole: user.role,
+      action: 'CTC_WHATSAPP_REQUEST',
+      companyName: company ? company.companyName : companyName,
+      myCoId: myCoId || undefined,
+      documentName: documentName || undefined,
+      ipAddress: req.ip || (req.headers['x-forwarded-for'] as string),
+    });
+    res.json({ success: true });
+  });
+
+  function formatMalaysiaTime(isoString: string): string {
+    try {
+      const date = new Date(isoString);
+      return (
+        new Intl.DateTimeFormat('en-GB', {
+          timeZone: 'Asia/Kuala_Lumpur',
+          day: '2-digit',
+          month: 'short',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: true,
+        }).format(date) + ' MYT'
+      );
+    } catch {
+      return isoString;
+    }
+  }
+
+  app.get('/api/audit/logs', requireAuth, (req: AuthenticatedRequest, res) => {
+    try {
+      const user = req.authUser!;
+      const logs = readAuditLogs();
+
+      const emailFilter = typeof req.query.email === 'string' ? req.query.email.trim().toLowerCase() : '';
+      const myCoIdFilter = typeof req.query.myCoId === 'string' ? req.query.myCoId.trim().toLowerCase() : '';
+      const actionFilter = typeof req.query.action === 'string' ? req.query.action.trim().toUpperCase() : '';
+      const fromDate = typeof req.query.fromDate === 'string' ? req.query.fromDate.trim() : '';
+      const toDate = typeof req.query.toDate === 'string' ? req.query.toDate.trim() : '';
+
+      let filtered = [...logs];
+
+      if (user.role === 'user') {
+        const allowedActions = [
+          'LOGIN',
+          'LOGOUT',
+          'VAULT_VISIT',
+          'DOCUMENT_DOWNLOAD',
+          'CTC_WHATSAPP_REQUEST',
+          'MISSING_FORM_REQUEST',
+          'PASSWORD_CHANGED',
+        ];
+        filtered = filtered.filter(
+          (l) =>
+            l.userEmail.toLowerCase() === user.email.toLowerCase() &&
+            allowedActions.includes(l.action)
+        );
+      } else {
+        if (emailFilter) {
+          filtered = filtered.filter((l) => l.userEmail.toLowerCase().includes(emailFilter));
+        }
+        if (myCoIdFilter) {
+          filtered = filtered.filter((l) => l.myCoId && l.myCoId.toLowerCase().includes(myCoIdFilter));
+        }
+        if (actionFilter) {
+          filtered = filtered.filter((l) => l.action === actionFilter);
+        }
+        if (fromDate) {
+          const fromMs = new Date(fromDate).getTime();
+          if (!isNaN(fromMs)) {
+            filtered = filtered.filter((l) => new Date(l.timestamp).getTime() >= fromMs);
+          }
+        }
+        if (toDate) {
+          const toMs = new Date(toDate).getTime() + 86399999;
+          if (!isNaN(toMs)) {
+            filtered = filtered.filter((l) => new Date(l.timestamp).getTime() <= toMs);
+          }
+        }
+      }
+
+      filtered.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+      res.json({ logs: filtered });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to load audit logs.';
+      res.status(500).json({ error: message });
+    }
+  });
+
+  app.get(
+    '/api/audit/export.csv',
+    (req, res, next) => {
+      const token = typeof req.query.token === 'string' ? req.query.token : undefined;
+      if (token && !req.headers.authorization) {
+        req.headers.authorization = `Bearer ${token}`;
+      }
+      next();
+    },
+    requireAuth,
+    requireRole('administrator', 'manager'),
+    (req: AuthenticatedRequest, res) => {
+      try {
+        const logs = readAuditLogs();
+        const emailFilter = typeof req.query.email === 'string' ? req.query.email.trim().toLowerCase() : '';
+        const myCoIdFilter = typeof req.query.myCoId === 'string' ? req.query.myCoId.trim().toLowerCase() : '';
+        const actionFilter = typeof req.query.action === 'string' ? req.query.action.trim().toUpperCase() : '';
+        const fromDate = typeof req.query.fromDate === 'string' ? req.query.fromDate.trim() : '';
+        const toDate = typeof req.query.toDate === 'string' ? req.query.toDate.trim() : '';
+
+        let filtered = [...logs];
+        if (emailFilter) {
+          filtered = filtered.filter((l) => l.userEmail.toLowerCase().includes(emailFilter));
+        }
+        if (myCoIdFilter) {
+          filtered = filtered.filter((l) => l.myCoId && l.myCoId.toLowerCase().includes(myCoIdFilter));
+        }
+        if (actionFilter) {
+          filtered = filtered.filter((l) => l.action === actionFilter);
+        }
+        if (fromDate) {
+          const fromMs = new Date(fromDate).getTime();
+          if (!isNaN(fromMs)) {
+            filtered = filtered.filter((l) => new Date(l.timestamp).getTime() >= fromMs);
+          }
+        }
+        if (toDate) {
+          const toMs = new Date(toDate).getTime() + 86399999;
+          if (!isNaN(toMs)) {
+            filtered = filtered.filter((l) => new Date(l.timestamp).getTime() <= toMs);
+          }
+        }
+
+        filtered.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+        const headers = [
+          'Timestamp (ISO)',
+          'Timestamp (Malaysia Time)',
+          'User Name',
+          'User Email',
+          'Role',
+          'Action',
+          'Company Name',
+          'SSM No. (myCoId)',
+          'Document Name',
+          'Details',
+          'IP Address',
+        ];
+
+        const escapeCsv = (val: string | undefined) => {
+          if (val == null) return '""';
+          const str = String(val).replace(/"/g, '""');
+          return `"${str}"`;
+        };
+
+        const rows = filtered.map((l) => [
+          escapeCsv(l.timestamp),
+          escapeCsv(formatMalaysiaTime(l.timestamp)),
+          escapeCsv(l.userName),
+          escapeCsv(l.userEmail),
+          escapeCsv(l.userRole),
+          escapeCsv(l.action),
+          escapeCsv(l.companyName),
+          escapeCsv(l.myCoId),
+          escapeCsv(l.documentName),
+          escapeCsv(l.details),
+          escapeCsv(l.ipAddress),
+        ]);
+
+        const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
+        const todayStr = new Date().toISOString().slice(0, 10);
+
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', `attachment; filename="cosec-audit-trail-${todayStr}.csv"`);
+        res.send(csvContent);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to export CSV.';
+        res.status(500).json({ error: message });
+      }
+    }
   );
 
   if (process.env.NODE_ENV !== 'production') {
